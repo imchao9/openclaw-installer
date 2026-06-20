@@ -1,0 +1,103 @@
+---
+- name: Preflight OpenClaw installer targets
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    local_report_dir: "scripts/ansible/reports"
+    preflight_check_sudo: true
+    min_disk_available_kb: 10485760
+
+  tasks:
+    - name: Ensure remote report directory exists without Python
+      ansible.builtin.raw: |
+        /bin/bash -lc '/bin/mkdir -p "$0"' "{{ remote_run_dir }}/reports"
+      changed_when: false
+
+    - name: Run preflight checks without Python
+      ansible.builtin.raw: |
+        /bin/bash <<'BASH'
+        set -u
+        report="{{ remote_run_dir }}/reports/preflight-report.json"
+
+        json_escape() {
+          LC_ALL=C LANG=C perl -0pe 's/\\/\\\\/g; s/"/\\"/g; s/\n/\\n/g; s/\r/\\r/g; s/\t/\\t/g'
+        }
+
+        bool() {
+          if "$@" >/dev/null 2>&1; then
+            printf true
+          else
+            printf false
+          fi
+        }
+
+        macos_version="$(sw_vers -productVersion 2>/dev/null || printf unknown)"
+        arch="$(uname -m 2>/dev/null || printf unknown)"
+        host="$(hostname 2>/dev/null || printf unknown)"
+        user="$(whoami 2>/dev/null || printf unknown)"
+        disk_available_kb="$(df -k / 2>/dev/null | awk 'NR==2 {print $4}' || printf 0)"
+        console_user="$(stat -f %Su /dev/console 2>/dev/null || printf unknown)"
+        sudo_checked=false
+        sudo_noninteractive_ok=false
+        if [ "{{ preflight_check_sudo | bool }}" = "True" ]; then
+          sudo_checked=true
+          if sudo -n true >/dev/null 2>&1; then
+            sudo_noninteractive_ok=true
+          fi
+        fi
+        enough_disk=false
+        if [ "${disk_available_kb:-0}" -ge "{{ min_disk_available_kb | int }}" ] 2>/dev/null; then
+          enough_disk=true
+        fi
+        gui_session_active=false
+        if [ "$console_user" != "root" ] && [ "$console_user" != "loginwindow" ] && [ "$console_user" != "unknown" ]; then
+          gui_session_active=true
+        fi
+
+        {
+          printf '{\n'
+          printf '  "schema_version": 1,\n'
+          printf '  "generated_at": "%s",\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          printf '  "host": "%s",\n' "$(printf '%s' "$host" | json_escape)"
+          printf '  "user": "%s",\n' "$(printf '%s' "$user" | json_escape)"
+          printf '  "home": "%s",\n' "$(printf '%s' "$HOME" | json_escape)"
+          printf '  "run_dir": "%s",\n' "$(printf '%s' "{{ remote_run_dir }}" | json_escape)"
+          printf '  "ssh_reached": true,\n'
+          printf '  "macos_version": "%s",\n' "$(printf '%s' "$macos_version" | json_escape)"
+          printf '  "arch": "%s",\n' "$(printf '%s' "$arch" | json_escape)"
+          printf '  "disk_available_kb": %s,\n' "${disk_available_kb:-0}"
+          printf '  "min_disk_available_kb": %s,\n' "{{ min_disk_available_kb | int }}"
+          printf '  "enough_disk": %s,\n' "$enough_disk"
+          printf '  "sudo_checked": %s,\n' "$sudo_checked"
+          printf '  "sudo_noninteractive_ok": %s,\n' "$sudo_noninteractive_ok"
+          printf '  "applications_writable": %s,\n' "$(bool test -w /Applications)"
+          printf '  "gui_session_active": %s,\n' "$gui_session_active"
+          printf '  "console_user": "%s",\n' "$(printf '%s' "$console_user" | json_escape)"
+          printf '  "package_run_dir_present": %s,\n' "$(bool test -d "{{ remote_run_dir }}")"
+          printf '  "install-files_installer_present": %s\n' "$(bool test -f "{{ remote_run_dir }}/install-files/install-new-macbook.sh")"
+          printf '}\n'
+        } > "$report"
+        cat "$report"
+        BASH
+      register: preflight_result
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure local preflight report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}/{{ inventory_hostname }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
+    - name: Save preflight report locally
+      ansible.builtin.copy:
+        content: "{{ preflight_result.stdout }}"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/preflight-report.json"
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: Show preflight summary
+      ansible.builtin.debug:
+        var: preflight_result.stdout_lines

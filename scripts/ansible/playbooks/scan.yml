@@ -1,0 +1,49 @@
+---
+- name: Scan OpenClaw installer checkpoints
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    scan_label: "scan"
+    local_report_dir: "scripts/ansible/reports"
+
+  tasks:
+    - name: Create remote report directory
+      ansible.builtin.file:
+        path: "{{ remote_run_dir }}/reports"
+        state: directory
+        mode: "0700"
+
+    - name: Upload checkpoint scanner
+      ansible.builtin.copy:
+        src: ../../../installer-core/scripts/check-install-checkpoints.sh
+        dest: /tmp/check-install-checkpoints.sh
+        mode: "0755"
+
+    - name: Run checkpoint scanner
+      ansible.builtin.shell: |
+        set -euo pipefail
+        bash /tmp/check-install-checkpoints.sh \
+          --run-dir "{{ remote_run_dir }}" \
+          --output "{{ remote_run_dir }}/reports/{{ scan_label }}-install-report.json" \
+          --plan "{{ remote_run_dir }}/reports/{{ scan_label }}-install-plan.env"
+      args:
+        executable: /bin/bash
+      register: scan_result
+      changed_when: false
+
+    - name: Show scan plan
+      ansible.builtin.debug:
+        var: scan_result.stdout_lines
+
+    - name: Fetch scan report
+      ansible.builtin.fetch:
+        src: "{{ remote_run_dir }}/reports/{{ scan_label }}-install-report.json"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ scan_label }}-install-report.json"
+        flat: true
+
+    - name: Fetch scan plan
+      ansible.builtin.fetch:
+        src: "{{ remote_run_dir }}/reports/{{ scan_label }}-install-plan.env"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ scan_label }}-install-plan.env"
+        flat: true

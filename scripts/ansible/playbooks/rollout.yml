@@ -1,0 +1,18 @@
+---
+- import_playbook: bootstrap-clt.yml
+
+- import_playbook: preflight.yml
+
+- import_playbook: scan.yml
+  vars:
+    scan_label: "initial"
+
+- import_playbook: sync.yml
+
+- import_playbook: install-missing.yml
+
+- import_playbook: scan.yml
+  vars:
+    scan_label: "final"
+
+- import_playbook: collect-reports.yml

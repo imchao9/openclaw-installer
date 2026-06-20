@@ -1,0 +1,59 @@
+---
+- name: Repair Codex CLI command on target Macs
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_repair_dir: /tmp/openclaw-agent-repair
+    install_codex_with_become: false
+
+  tasks:
+    - name: Create remote repair directory
+      ansible.builtin.file:
+        path: "{{ remote_repair_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Upload Codex CLI repair script
+      ansible.builtin.copy:
+        src: ../../../upload-packages/fix-codex-cli.sh
+        dest: "{{ remote_repair_dir }}/fix-codex-cli.sh"
+        mode: "0755"
+
+    - name: Install Codex CLI with privilege when requested
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+        if command -v codex >/dev/null 2>&1; then
+          codex --version || true
+          exit 0
+        fi
+        npm_bin="$(command -v npm || true)"
+        if [ -z "$npm_bin" ] && [ -x /usr/local/bin/npm ]; then
+          npm_bin=/usr/local/bin/npm
+        fi
+        if [ -z "$npm_bin" ] && [ -x /opt/homebrew/bin/npm ]; then
+          npm_bin=/opt/homebrew/bin/npm
+        fi
+        if [ -z "$npm_bin" ]; then
+          echo "npm not found"
+          exit 1
+        fi
+        "$npm_bin" install -g @openai/codex
+      args:
+        executable: /bin/bash
+      become: true
+      when: install_codex_with_become | bool
+      changed_when: true
+
+    - name: Run Codex CLI repair
+      ansible.builtin.shell: |
+        set -o pipefail
+        bash "{{ remote_repair_dir }}/fix-codex-cli.sh"
+      args:
+        executable: /bin/bash
+      register: repair_result
+      changed_when: "'added ' in repair_result.stdout or 'installing @openai/codex' in repair_result.stdout or 'linked Codex.app CLI' in repair_result.stdout"
+
+    - name: Show repair output
+      ansible.builtin.debug:
+        var: repair_result.stdout_lines

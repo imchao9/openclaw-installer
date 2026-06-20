@@ -1,0 +1,172 @@
+---
+- name: Bootstrap Command Line Tools before Python-backed Ansible modules
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    local_team_dir: "{{ playbook_dir }}/../../../openclaw-team"
+    local_root_dir: "{{ playbook_dir }}/../../.."
+    clt_apple_silicon_dmg: "{{ local_team_dir }}/Command_Line_Tools_26.5_Apple_silicon.dmg"
+    clt_universal_dmg: "{{ local_root_dir }}/openclaw-team/Command_Line_Tools_26.5_Universal.dmg"
+    clt_xcode_16_4_dmg: "{{ local_team_dir }}/Command_Line_Tools_for_Xcode_16.4.dmg"
+    clt_remote_dir: "{{ remote_run_dir }}/clt-cache"
+
+  tasks:
+    - name: Create remote CLT bundle directory without Python
+      ansible.builtin.raw: |
+        /bin/bash -lc '/bin/mkdir -p "$0" "$1"' "{{ clt_remote_dir }}" "{{ remote_run_dir }}/reports"
+      changed_when: false
+
+    - name: Detect remote architecture without Python
+      ansible.builtin.raw: |
+        /usr/bin/uname -m
+      register: remote_arch_result
+      changed_when: false
+
+    - name: Detect remote macOS version without Python
+      ansible.builtin.raw: |
+        /usr/bin/sw_vers -productVersion
+      register: remote_macos_result
+      changed_when: false
+
+    - name: Check existing Command Line Tools without Python
+      ansible.builtin.raw: |
+        /usr/bin/xcode-select -p
+      register: remote_clt_result
+      changed_when: false
+      failed_when: false
+
+    - name: Upload Apple Silicon Command Line Tools bundle for arm64 targets
+      ansible.posix.synchronize:
+        src: "{{ clt_apple_silicon_dmg }}"
+        dest: "{{ clt_remote_dir }}/"
+      when:
+        - remote_clt_result.rc != 0
+        - remote_macos_result.stdout | trim is version('26.2', '>=')
+        - remote_arch_result.stdout | trim == 'arm64'
+        - lookup('ansible.builtin.fileglob', clt_apple_silicon_dmg, wantlist=True) | length > 0
+
+    - name: Upload Universal Command Line Tools bundle for fallback or Intel targets
+      ansible.posix.synchronize:
+        src: "{{ clt_universal_dmg }}"
+        dest: "{{ clt_remote_dir }}/"
+      when:
+        - remote_clt_result.rc != 0
+        - remote_macos_result.stdout | trim is version('26.2', '>=')
+        - lookup('ansible.builtin.fileglob', clt_universal_dmg, wantlist=True) | length > 0
+        - remote_arch_result.stdout | trim != 'arm64' or lookup('ansible.builtin.fileglob', clt_apple_silicon_dmg, wantlist=True) | length == 0
+
+    - name: Upload Xcode 16.4 Command Line Tools bundle for macOS 15 targets
+      ansible.posix.synchronize:
+        src: "{{ clt_xcode_16_4_dmg }}"
+        dest: "{{ clt_remote_dir }}/"
+      when:
+        - remote_clt_result.rc != 0
+        - remote_macos_result.stdout | trim is version('15.0', '>=')
+        - remote_macos_result.stdout | trim is version('26.2', '<')
+        - lookup('ansible.builtin.fileglob', clt_xcode_16_4_dmg, wantlist=True) | length > 0
+
+    - name: Install architecture-matched Command Line Tools without Python
+      ansible.builtin.raw: |
+        /bin/bash <<'BASH'
+        set -euo pipefail
+
+        log() {
+          printf '[bootstrap-clt] %s\n' "$*"
+        }
+
+        version_at_least() {
+          local version major minor need_major="$1" need_minor="$2"
+          version="$(/usr/bin/sw_vers -productVersion 2>/dev/null || printf 0.0)"
+          major="${version%%.*}"
+          minor="${version#*.}"
+          minor="${minor%%.*}"
+          [ -n "$minor" ] || minor=0
+          if [ "$major" -gt "$need_major" ]; then
+            return 0
+          fi
+          [ "$major" -eq "$need_major" ] && [ "$minor" -ge "$need_minor" ]
+        }
+
+        install_pkg_from_dmg() {
+          local dmg="$1" mount pkg
+          mount="$(/usr/bin/mktemp -d /tmp/openclaw-clt.XXXXXX)"
+          cleanup() {
+            /usr/bin/hdiutil detach "$mount" -quiet >/dev/null 2>&1 || true
+            /bin/rmdir "$mount" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          /usr/bin/hdiutil attach -nobrowse -quiet -mountpoint "$mount" "$dmg"
+          pkg="$(/usr/bin/find "$mount" -maxdepth 4 -type d -name '*.pkg' -print -quit)"
+          if [ -z "$pkg" ]; then
+            log "No pkg found inside $dmg"
+            return 1
+          fi
+          /usr/bin/sudo -n /usr/sbin/installer -pkg "$pkg" -target /
+          cleanup
+          trap - EXIT
+        }
+
+        if /usr/bin/xcode-select -p >/dev/null 2>&1; then
+          log "Command Line Tools already available: $(/usr/bin/xcode-select -p)"
+          exit 0
+        fi
+
+        arch="$(/usr/bin/uname -m)"
+        clt_dmg=""
+        if version_at_least 26 2; then
+          case "$arch" in
+            arm64)
+              for candidate in \
+                "{{ clt_remote_dir }}/Command_Line_Tools_26.5_Apple_silicon.dmg" \
+                "{{ clt_remote_dir }}/Command_Line_Tools_26.5_Universal.dmg"; do
+                if [ -f "$candidate" ]; then
+                  clt_dmg="$candidate"
+                  break
+                fi
+              done
+              ;;
+            x86_64)
+              for candidate in \
+                "{{ clt_remote_dir }}/Command_Line_Tools_26.5_Universal.dmg" \
+                "{{ clt_remote_dir }}/Command_Line_Tools_26.5_Intel.dmg"; do
+                if [ -f "$candidate" ]; then
+                  clt_dmg="$candidate"
+                  break
+                fi
+              done
+              ;;
+            *)
+              log "Unknown architecture: $arch"
+              exit 0
+              ;;
+          esac
+        elif version_at_least 15 0; then
+          if [ -f "{{ clt_remote_dir }}/Command_Line_Tools_for_Xcode_16.4.dmg" ]; then
+            clt_dmg="{{ clt_remote_dir }}/Command_Line_Tools_for_Xcode_16.4.dmg"
+          fi
+        else
+          log "Skipping bundled Command Line Tools because macOS $(/usr/bin/sw_vers -productVersion) is below 15.0"
+          exit 0
+        fi
+
+        if [ -z "$clt_dmg" ]; then
+          log "No compatible Command Line Tools DMG found for macOS $(/usr/bin/sw_vers -productVersion) on $arch"
+          exit 0
+        fi
+
+        if [ -n "{{ ansible_become_password | default('') }}" ]; then
+          printf '%s\n' "{{ ansible_become_password | default('') }}" | /usr/bin/sudo -S -p "" -v
+        else
+          /usr/bin/sudo -n true
+        fi
+
+        log "Installing Command Line Tools for $arch from $clt_dmg"
+        install_pkg_from_dmg "$clt_dmg"
+        BASH
+      register: bootstrap_clt_result
+      changed_when: "'Installing Command Line Tools' in bootstrap_clt_result.stdout"
+
+    - name: Show CLT bootstrap output
+      ansible.builtin.debug:
+        var: bootstrap_clt_result.stdout_lines

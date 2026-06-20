@@ -1,0 +1,72 @@
+---
+- name: Validate Codex and OpenClaw on target Macs
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_validate_dir: /tmp/openclaw-agent-validate
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    local_report_dir: "scripts/ansible/reports"
+    validate_codex: "1"
+    validate_openclaw: "1"
+    repair_openclaw_config: "0"
+    check_openclaw_config_shape: "0"
+    codex_timeout_seconds: "45"
+    codex_validation_mode: "endpoint"
+    openclaw_timeout_seconds: "45"
+    openclaw_test_model: ""
+    codex_hello_prompt: "你好你是谁"
+    openclaw_hello_prompt: "你好你是谁"
+    expected_text: ""
+
+  tasks:
+    - name: Create remote validation directory
+      ansible.builtin.file:
+        path: "{{ remote_validate_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Create remote report directory
+      ansible.builtin.file:
+        path: "{{ remote_run_dir }}/reports"
+        state: directory
+        mode: "0700"
+
+    - name: Upload validation script
+      ansible.builtin.copy:
+        src: ../../../installer-core/scripts/validate-agent-configs.sh
+        dest: "{{ remote_validate_dir }}/validate-agent-configs.sh"
+        mode: "0755"
+
+    - name: Run Codex/OpenClaw validation
+      ansible.builtin.shell: |
+        set -o pipefail
+        bash "{{ remote_validate_dir }}/validate-agent-configs.sh"
+      args:
+        executable: /bin/bash
+      environment:
+        VALIDATE_CODEX: "{{ validate_codex }}"
+        VALIDATE_OPENCLAW: "{{ validate_openclaw }}"
+        REPAIR_OPENCLAW_CONFIG: "{{ repair_openclaw_config }}"
+        CHECK_OPENCLAW_CONFIG_SHAPE: "{{ check_openclaw_config_shape }}"
+        CODEX_TIMEOUT_SECONDS: "{{ codex_timeout_seconds }}"
+        CODEX_VALIDATION_MODE: "{{ codex_validation_mode }}"
+        OPENCLAW_TIMEOUT_SECONDS: "{{ openclaw_timeout_seconds }}"
+        OPENCLAW_TEST_MODEL: "{{ openclaw_test_model }}"
+        CODEX_HELLO_PROMPT: "{{ codex_hello_prompt }}"
+        OPENCLAW_HELLO_PROMPT: "{{ openclaw_hello_prompt }}"
+        EXPECTED_TEXT: "{{ expected_text }}"
+        VALIDATION_REPORT_PATH: "{{ remote_run_dir }}/reports/validation-report.json"
+      register: validation_result
+      changed_when: false
+      failed_when: false
+
+    - name: Show validation output
+      ansible.builtin.debug:
+        var: validation_result.stdout_lines
+
+    - name: Fetch validation report
+      ansible.builtin.fetch:
+        src: "{{ remote_run_dir }}/reports/validation-report.json"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/validation-report.json"
+        flat: true
+      when: validation_result is defined

@@ -1,0 +1,28 @@
+---
+- name: Collect OpenClaw installer reports
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    local_report_dir: "scripts/ansible/reports"
+
+  tasks:
+    - name: Find remote report files
+      ansible.builtin.find:
+        paths: "{{ remote_run_dir }}/reports"
+        patterns:
+          - "*.json"
+          - "*.env"
+        file_type: file
+      register: report_files
+
+    - name: Fetch remote reports
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ item.path | basename }}"
+        flat: true
+      loop: "{{ report_files.files }}"
+
+    - name: Summarize fetched report names
+      ansible.builtin.debug:
+        msg: "{{ report_files.files | map(attribute='path') | map('basename') | list }}"

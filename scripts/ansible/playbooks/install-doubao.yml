@@ -1,0 +1,110 @@
+---
+- name: Install and configure Doubao input method only
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    local_doubao_zip: "{{ playbook_dir }}/../../../install-files/openclaw-team/DoubaoImeInstaller_v0.9.1.app/Contents/Resources/DoubaoIme.zip"
+    local_configure_script: "{{ playbook_dir }}/../../../install-files/installer-core/scripts/configure-doubao-input.sh"
+    local_self_extract_script: "/tmp/openclaw-doubao-install-{{ inventory_hostname }}.sh"
+    local_payload_archive: "/tmp/openclaw-doubao-payload-{{ inventory_hostname }}.tgz"
+
+  tasks:
+    - name: Generate self-contained Doubao installer script locally
+      ansible.builtin.shell: |
+        set -euo pipefail
+        payload_dir="$(/usr/bin/mktemp -d /tmp/openclaw-doubao-payload.XXXXXX)"
+        cleanup() {
+          /bin/rm -rf "$payload_dir"
+        }
+        trap cleanup EXIT
+        /bin/cp "{{ local_configure_script }}" "$payload_dir/configure-doubao-input.sh"
+        /bin/cp "{{ local_doubao_zip }}" "$payload_dir/DoubaoIme.zip"
+        /usr/bin/tar -czf "{{ local_payload_archive }}" -C "$payload_dir" .
+        {
+          printf '%s\n' '#!/usr/bin/env bash'
+          printf '%s\n' 'set -euo pipefail'
+          printf '%s\n' 'export DOUBAO_SUDO_PASSWORD="{{ ansible_become_password | default('') }}"'
+          printf '%s\n' 'export DOUBAO_USE_SWIFT="${DOUBAO_USE_SWIFT:-0}"'
+          printf '%s\n' 'tmp="$(/usr/bin/mktemp -d /tmp/openclaw-doubao-install.XXXXXX)"'
+          printf '%s\n' 'cleanup() { /bin/rm -rf "$tmp"; }'
+          printf '%s\n' 'trap cleanup EXIT'
+          printf '%s\n' '/usr/bin/awk '\''/^__OPENCLAW_DOUBAO_PAYLOAD__$/ {found=1; next} found {print}'\'' "$0" | /usr/bin/base64 -D | /usr/bin/tar -xzf - -C "$tmp"'
+          printf '%s\n' '/bin/chmod +x "$tmp/configure-doubao-input.sh"'
+          printf '%s\n' 'export DOUBAO_ZIP="$tmp/DoubaoIme.zip"'
+          printf '%s\n' '/bin/bash "$tmp/configure-doubao-input.sh"'
+          printf '%s\n' 'exit 0'
+          printf '%s\n' '__OPENCLAW_DOUBAO_PAYLOAD__'
+          /usr/bin/base64 -i "{{ local_payload_archive }}"
+        } > "{{ local_self_extract_script }}"
+        /bin/chmod 700 "{{ local_self_extract_script }}"
+        /bin/test -s "{{ local_self_extract_script }}"
+        /bin/ls -lh "{{ local_self_extract_script }}" "{{ local_payload_archive }}" >&2
+      args:
+        executable: /bin/bash
+      delegate_to: 127.0.0.1
+      become: false
+      vars:
+        ansible_connection: local
+      changed_when: false
+
+    - name: Install and configure Doubao without remote Python
+      ansible.builtin.script:
+        cmd: "{{ local_self_extract_script }}"
+      environment:
+        DOUBAO_SUDO_PASSWORD: "{{ ansible_become_password | default('') }}"
+      register: doubao_install_result
+      changed_when: "'Doubao input configured' in doubao_install_result.stdout"
+
+    - name: Verify Doubao state without Python
+      ansible.builtin.raw: |
+        /bin/bash <<'BASH'
+        set -euo pipefail
+        app="/Library/Input Methods/DoubaoIme.app"
+        bundle="com.bytedance.inputmethod.doubaoime"
+        mode="com.bytedance.inputmethod.doubaoime.pinyin"
+        pref="$HOME/Library/Preferences/com.apple.HIToolbox.plist"
+        tcc="$HOME/Library/Application Support/com.apple.TCC/TCC.db"
+        version="$(/usr/bin/defaults read "$app/Contents/Info" CFBundleShortVersionString 2>/dev/null || true)"
+        input_source=0
+        /usr/bin/defaults read "$pref" AppleEnabledInputSources 2>/dev/null | /usr/bin/grep -qF "$mode" && input_source=1
+        menu=0
+        /usr/bin/defaults read com.apple.systemuiserver menuExtras 2>/dev/null | /usr/bin/grep -qF "TextInput.menu" && menu=1
+        mic=0
+        if [ -f "$tcc" ] && command -v sqlite3 >/dev/null 2>&1; then
+          row="$(/usr/bin/sqlite3 "$tcc" "select auth_value || '|' || length(csreq) from access where service='kTCCServiceMicrophone' and client='$bundle' order by last_modified desc limit 1;" 2>/dev/null || true)"
+          case "$row" in
+            2\|[1-9]*) mic=1 ;;
+          esac
+        fi
+        printf 'doubao_version=%s\n' "$version"
+        printf 'doubao_input_source=%s\n' "$input_source"
+        printf 'doubao_menu=%s\n' "$menu"
+        printf 'doubao_microphone=%s\n' "$mic"
+        test "$version" = "0.9.1"
+        test "$input_source" = "1"
+        test "$menu" = "1"
+        test "$mic" = "1"
+        BASH
+      register: doubao_verify_result
+      changed_when: false
+
+    - name: Show Doubao install output
+      ansible.builtin.debug:
+        var: doubao_install_result.stdout_lines
+
+    - name: Show Doubao verify output
+      ansible.builtin.debug:
+        var: doubao_verify_result.stdout_lines
+
+    - name: Remove local temporary Doubao installer script
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ local_self_extract_script }}"
+        - "{{ local_payload_archive }}"
+      delegate_to: 127.0.0.1
+      become: false
+      vars:
+        ansible_connection: local

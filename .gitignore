@@ -1,0 +1,60 @@
+# macOS and editor noise
+.DS_Store
+**/.DS_Store
+*.swp
+*.tmp
+tmp/
+__pycache__/
+**/__pycache__/
+.pytest_cache/
+
+# Local install outputs and package build products
+.package-build/
+dist/
+install-files/
+serve/
+upload-packages/*
+!upload-packages/fix-codex-cli.sh
+scripts/archive/
+
+# Sensitive local material. Keep this outside Git.
+private-secrets/
+**/secrets.env
+**/auth.json
+**/config.toml
+**/openclaw.json
+**/key.txt
+**/key.csv
+**/deepseek-key.csv
+**/deepseek-key.xlsx
+
+# Downloaded installers and generated packages
+*.dmg
+*.pkg
+*.tgz
+*.tar
+*.tar.gz
+*.tar.zst
+*.zip
+*.zst
+*.sha256
+
+# Generated documents
+docs/*.pdf
+output/
+
+# Runtime reports
+*.log
+http-server.pid
+scripts/ansible/**/reports/*
+!scripts/ansible/reports/.gitkeep
+
+# Keep lightweight source assets from the OpenClaw bundle.
+openclaw-team/*
+!openclaw-team/disable-sleep-note.txt
+!openclaw-team/fix-openclaw-install.sh
+!openclaw-team/setup-openclaw-weixin.sh
+!openclaw-team/OpenClaw Dashboard.app/
+!openclaw-team/OpenClaw Dashboard.app/**
+!openclaw-team/OpenClaw Weixin Connect.app/
+!openclaw-team/OpenClaw Weixin Connect.app/**

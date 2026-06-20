@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNNER="$APP_DIR/Resources/openclaw-dashboard.command"
+
+chmod +x "$RUNNER" 2>/dev/null || true
+
+osascript <<APPLESCRIPT
+tell application "Terminal"
+  activate
+  do script quoted form of "$RUNNER"
+end tell
+APPLESCRIPT

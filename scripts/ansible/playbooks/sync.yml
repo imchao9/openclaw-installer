@@ -1,0 +1,91 @@
+---
+- name: Sync OpenClaw installer package to target Macs
+  hosts: openclaw_macs
+  gather_facts: false
+  vars:
+    remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
+    sync_private_secrets: false
+    local_dist_dir: "{{ playbook_dir }}/../../../install-files"
+    local_entrypoint: "{{ playbook_dir }}/../../../install-openclaw.sh"
+    local_fetch_script: "{{ playbook_dir }}/../../fetch-package-over-http.sh"
+    local_private_secrets_dir: "{{ playbook_dir }}/../../../private-secrets"
+    sync_clash_package: false
+    local_clash_dir: ""
+    sync_transport: "{{ lookup('env', 'OPENCLAW_SYNC_TRANSPORT') | default('auto', true) }}"
+    package_http_base_url: "{{ lookup('env', 'OPENCLAW_PACKAGE_BASE_URL') | default('', true) }}"
+    package_profile: "auto"
+
+  tasks:
+    - name: Select sync transport
+      ansible.builtin.set_fact:
+        effective_sync_transport: "{{ sync_transport if sync_transport != 'auto' else ('http' if package_http_base_url | length > 0 else 'rsync') }}"
+
+    - name: Read remote macOS version for HTTP package selection
+      ansible.builtin.command: sw_vers -productVersion
+      register: remote_macos_version
+      changed_when: false
+      when: effective_sync_transport == 'http' and package_profile == 'auto'
+
+    - name: Resolve HTTP package profile
+      ansible.builtin.set_fact:
+        resolved_package_profile: >-
+          {{
+            package_profile
+            if package_profile != 'auto'
+            else ('macos26-arm64' if (remote_macos_version.stdout.split('.')[0] | int) >= 26 else 'macos15-arm64')
+          }}
+      when: effective_sync_transport == 'http'
+
+    - name: Require package HTTP base URL for HTTP sync
+      ansible.builtin.fail:
+        msg: "Set OPENCLAW_PACKAGE_BASE_URL=http://<installer-host>:8765 or pass -e package_http_base_url=..."
+      when: effective_sync_transport == 'http' and package_http_base_url | length == 0
+
+    - name: Create remote install directory
+      ansible.builtin.file:
+        path: "{{ remote_run_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Upload unified installer entrypoint
+      ansible.builtin.copy:
+        src: "{{ local_entrypoint }}"
+        dest: "{{ remote_run_dir }}/install-openclaw.sh"
+        mode: "0755"
+      when: effective_sync_transport == 'rsync'
+
+    - name: Sync install-files directory
+      ansible.posix.synchronize:
+        src: "{{ local_dist_dir }}"
+        dest: "{{ remote_run_dir }}/"
+        delete: true
+      when: effective_sync_transport == 'rsync'
+
+    - name: Upload HTTP package fetcher
+      ansible.builtin.copy:
+        src: "{{ local_fetch_script }}"
+        dest: "/tmp/fetch-package-over-http.sh"
+        mode: "0755"
+      when: effective_sync_transport == 'http'
+
+    - name: Download and extract package over HTTP with resume
+      ansible.builtin.command: bash /tmp/fetch-package-over-http.sh
+      environment:
+        PACKAGE_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-{{ resolved_package_profile }}.tar.zst"
+        CHECKSUM_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-{{ resolved_package_profile }}.sha256"
+        REMOTE_RUN_DIR: "{{ remote_run_dir }}"
+      when: effective_sync_transport == 'http'
+
+    - name: Sync private-secrets directory when explicitly enabled
+      ansible.posix.synchronize:
+        src: "{{ local_private_secrets_dir }}"
+        dest: "{{ remote_run_dir }}/"
+        delete: true
+      when: sync_private_secrets | bool
+
+    - name: Sync separate Clash package when explicitly enabled
+      ansible.posix.synchronize:
+        src: "{{ local_clash_dir }}"
+        dest: "{{ remote_run_dir }}/"
+        delete: true
+      when: sync_clash_package | bool and local_clash_dir | length > 0
