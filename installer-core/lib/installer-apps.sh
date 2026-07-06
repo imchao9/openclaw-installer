@@ -104,16 +104,18 @@ install_core_apps() {
     return
   fi
 
+  local clash_party_pkg=""
+
   install_app_dmgs_parallel \
     "Codex" "$BUNDLE_DIR/Codex.dmg" "Codex.app" \
     "OpenClaw" "$BUNDLE_DIR/OpenClaw-2026.5.26.dmg" "OpenClaw.app"
 
   if [ "${SKIP_CLASH:-0}" = "1" ]; then
     log "Skipping Clash installs (SKIP_CLASH=1)"
-  elif [ -f "$BUNDLE_DIR/Clash Verge 2.5.1.dmg" ] && [ -f "$BUNDLE_DIR/clash-party-macos-1.9.5-arm64.pkg" ]; then
-    install_pkg_file "Clash Party" "$BUNDLE_DIR/clash-party-macos-1.9.5-arm64.pkg"
+  elif clash_party_pkg="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -name 'clash-party-macos-*.pkg' -print | sort | tail -n 1)" && [ -n "$clash_party_pkg" ]; then
+    install_pkg_file "Clash Party" "$clash_party_pkg"
   else
-    log "Skipping Clash installs because Clash packages are not in this bundle"
+    log "Skipping Clash Party because Clash Party pkg is not in this bundle"
     log "Install them separately from 05-Clash单独安装/"
   fi
 }

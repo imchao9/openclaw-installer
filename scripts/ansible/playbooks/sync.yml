@@ -26,13 +26,23 @@
       changed_when: false
       when: effective_sync_transport == 'http' and package_profile == 'auto'
 
+    - name: Read remote machine architecture for HTTP package selection
+      ansible.builtin.command: uname -m
+      register: remote_machine_arch
+      changed_when: false
+      when: effective_sync_transport == 'http' and package_profile == 'auto'
+
     - name: Resolve HTTP package profile
       ansible.builtin.set_fact:
         resolved_package_profile: >-
           {{
             package_profile
             if package_profile != 'auto'
-            else ('macos26-arm64' if (remote_macos_version.stdout.split('.')[0] | int) >= 26 else 'macos15-arm64')
+            else (
+              'macos26-arm64'
+              if ((remote_macos_version.stdout.split('.')[0] | int) >= 26 and remote_machine_arch.stdout == 'arm64')
+              else ('macos15-x64' if remote_machine_arch.stdout == 'x86_64' else 'macos15-arm64')
+            )
           }}
       when: effective_sync_transport == 'http'
 

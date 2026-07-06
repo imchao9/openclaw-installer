@@ -6,6 +6,8 @@
 #   upload-packages/openclaw-macos26-arm64.sha256
 #   upload-packages/openclaw-macos15-arm64.tar.zst
 #   upload-packages/openclaw-macos15-arm64.sha256
+#   upload-packages/openclaw-macos15-x64.tar.zst
+#   upload-packages/openclaw-macos15-x64.sha256
 #
 # These packages are intentionally non-secret. Keep private-secrets/ separate.
 set -euo pipefail
@@ -26,11 +28,12 @@ REFRESH_DOWNLOAD_ASSETS="${REFRESH_DOWNLOAD_ASSETS:-0}"
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/build-dist.sh [all|macos26-arm64|macos15-arm64]
+  bash scripts/build-dist.sh [all|macos26-arm64|macos15-arm64|macos15-x64]
 
 Outputs only these supported archives:
   upload-packages/openclaw-macos26-arm64.tar.zst
   upload-packages/openclaw-macos15-arm64.tar.zst
+  upload-packages/openclaw-macos15-x64.tar.zst
 
 Set OVERWRITE_DIST=1 to replace existing package build directories and archives.
 Set REFRESH_DOWNLOAD_ASSETS=1 to download public assets before building.
@@ -38,7 +41,7 @@ EOF
 }
 
 case "$PROFILE" in
-  all|macos26-arm64|macos15-arm64)
+  all|macos26-arm64|macos15-arm64|macos15-x64)
     ;;
   -h|--help)
     usage
@@ -104,6 +107,9 @@ profile_clt_asset() {
     macos15-arm64)
       printf '%s\n' "Command_Line_Tools_for_Xcode_16.4.dmg"
       ;;
+    macos15-x64)
+      printf '%s\n' "Command_Line_Tools_for_Xcode_16.4.dmg"
+      ;;
   esac
 }
 
@@ -115,7 +121,26 @@ profile_description() {
     macos15-arm64)
       printf '%s\n' "Apple Silicon targets on macOS 15.x or compatible older setup flow"
       ;;
+    macos15-x64)
+      printf '%s\n' "Intel targets on macOS 15.x"
+      ;;
   esac
+}
+
+copy_profile_asset() {
+  local profile="$1" asset="$2" dst="$3" src=""
+  case "$profile:$asset" in
+    macos15-x64:Codex.dmg)
+      src="${CODEX_DMG_X64:-/Users/cm/Downloads/Codex-latest-x64.dmg}"
+      ;;
+    macos15-x64:clash-party-macos-1.9.6-x64.pkg)
+      src="${CLASH_PARTY_PKG_X64:-/Users/cm/Downloads/clash-party-macos-1.9.6-x64.pkg}"
+      ;;
+    *)
+      src="$ROOT/openclaw-team/$asset"
+      ;;
+  esac
+  copy_item "$src" "$dst"
 }
 
 copy_openclaw_team_assets() {
@@ -127,14 +152,12 @@ copy_openclaw_team_assets() {
     "AweSun_v16.5.0.30757_arm64.dmg" \
     "CC-Switch-v3.15.0-macOS.dmg" \
     "Clash Verge 2.5.1.dmg" \
-    "Codex.dmg" \
     "DingTalk_v8.3.30-Installer_55620621_arm64.dmg" \
     "Homebrew.pkg" \
     "Obsidian-1.12.7.dmg" \
     "OpenClaw Dashboard.app" \
     "OpenClaw Weixin Connect.app" \
     "OpenClaw-2026.5.26.dmg" \
-    "clash-party-macos-1.9.5-arm64.pkg" \
     "fix-openclaw-install.sh" \
     "googlechrome.dmg" \
     "node-v24.16.0.pkg" \
@@ -142,6 +165,13 @@ copy_openclaw_team_assets() {
     "disable-sleep-note.txt"; do
     copy_item "$ROOT/openclaw-team/$asset" "$dst/$asset"
   done
+
+  copy_profile_asset "$profile" "Codex.dmg" "$dst/Codex.dmg"
+  if [ "$profile" = "macos15-x64" ]; then
+    copy_profile_asset "$profile" "clash-party-macos-1.9.6-x64.pkg" "$dst/clash-party-macos-1.9.6-x64.pkg"
+  else
+    copy_item "$ROOT/openclaw-team/clash-party-macos-1.9.5-arm64.pkg" "$dst/clash-party-macos-1.9.5-arm64.pkg"
+  fi
 
   clt="$(profile_clt_asset "$profile")"
   copy_item "$ROOT/openclaw-team/$clt" "$dst/$clt"
@@ -152,11 +182,18 @@ copy_openclaw_team_assets() {
 }
 
 copy_cliproxy_bundle() {
-  local dst="$1"
+  local profile="$1" dst="$2"
   local source_dir="${CLIPROXY_SOURCE_DIR:-/Users/cm/Documents/Me/Tool/cliproxy/CLIProxyAPI}"
-  if [ -x "$source_dir/bin/CLIProxyAPI" ]; then
+  local binary="${CLIPROXY_BINARY:-}"
+  if [ -z "$binary" ] && [ "$profile" = "macos15-x64" ]; then
+    binary="${CLIPROXY_X64_BINARY:-}"
+  fi
+  if [ -z "$binary" ]; then
+    binary="$source_dir/bin/CLIProxyAPI"
+  fi
+  if [ -x "$binary" ]; then
     mkdir -p "$dst/cliproxy"
-    copy_item "$source_dir/bin/CLIProxyAPI" "$dst/cliproxy/CLIProxyAPI"
+    copy_item "$binary" "$dst/cliproxy/CLIProxyAPI"
     if [ -d "$source_dir/bin/static" ]; then
       copy_clean_dir "$source_dir/bin/static" "$dst/cliproxy/static"
     fi
@@ -170,7 +207,7 @@ debug: false
 logging-to-file: true
 EOF
   else
-    printf '[WARN] CLIProxyAPI binary not found at %s/bin/CLIProxyAPI; skipping cliproxy runtime bundle.\n' "$source_dir" >&2
+    printf '[WARN] CLIProxyAPI binary not found at %s; skipping cliproxy runtime bundle.\n' "$binary" >&2
   fi
 }
 
@@ -200,7 +237,7 @@ validation.
 - Profile-specific Command Line Tools: \`$clt\`
 - Node.js PKG
 - Google Chrome DMG
-- Codex DMG and Codex.app bundled CLI
+- Profile-specific Codex DMG and Codex.app bundled CLI
 - OpenClaw DMG and OpenClaw CLI/Gateway repair
 - Optional offline npm cache for OpenClaw CLI install, when \`openclaw-npm-cache.tgz\` is present
 - Obsidian DMG
@@ -282,7 +319,7 @@ build_profile() {
   fi
   copy_clean_dir "$ROOT/installer-core" "$dist/installer-core"
   copy_openclaw_team_assets "$profile" "$dist/openclaw-team"
-  copy_cliproxy_bundle "$dist/openclaw-team"
+  copy_cliproxy_bundle "$profile" "$dist/openclaw-team"
   write_manifest "$profile" "$dist"
 
   chmod +x \
@@ -317,6 +354,7 @@ fi
 if [ "$PROFILE" = "all" ]; then
   build_profile macos26-arm64
   build_profile macos15-arm64
+  build_profile macos15-x64
 else
   build_profile "$PROFILE"
 fi

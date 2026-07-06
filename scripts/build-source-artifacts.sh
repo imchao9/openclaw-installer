@@ -26,7 +26,7 @@ Usage:
   bash scripts/build-source-artifacts.sh [options]
 
 Options:
-  --profile PROFILE          Build all, macos26-arm64, or macos15-arm64. Default: all.
+  --profile PROFILE          Build all, macos26-arm64, macos15-arm64, or macos15-x64. Default: all.
   --overwrite                Replace existing package outputs.
   --refresh-download-assets  Download public assets before packaging.
   --skip-pdf                 Do not regenerate docs/*.pdf.
@@ -42,6 +42,7 @@ Environment:
 Examples:
   bash scripts/build-source-artifacts.sh --overwrite
   bash scripts/build-source-artifacts.sh --profile macos15-arm64 --overwrite
+  bash scripts/build-source-artifacts.sh --profile macos15-x64 --overwrite
   bash scripts/build-source-artifacts.sh --skip-packages
   bash scripts/build-source-artifacts.sh --profile macos26-arm64 --overwrite --sync-install-files
 
@@ -102,7 +103,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROFILE" in
-  all|macos26-arm64|macos15-arm64) ;;
+  all|macos26-arm64|macos15-arm64|macos15-x64) ;;
   *)
     echo "unsupported profile: $PROFILE" >&2
     exit 1
@@ -110,7 +111,7 @@ case "$PROFILE" in
 esac
 
 case "$SYNC_PROFILE" in
-  macos26-arm64|macos15-arm64) ;;
+  macos26-arm64|macos15-arm64|macos15-x64) ;;
   *)
     echo "unsupported sync profile: $SYNC_PROFILE" >&2
     exit 1
