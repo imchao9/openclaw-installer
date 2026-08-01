@@ -16,9 +16,10 @@ FORCE="${FORCE:-0}"
 RUN_CLASH="${RUN_CLASH:-auto}"
 RUN_BASE="${RUN_BASE:-1}"
 RUN_SECRETS="${RUN_SECRETS:-auto}"
-RUN_EXTRAS="${RUN_EXTRAS:-0}"
+RUN_EXTRAS="${RUN_EXTRAS:-1}"
 RUN_OFFICE_SKILLS="${RUN_OFFICE_SKILLS:-0}"
-RUN_CLIPROXY_CONFIG="${RUN_CLIPROXY_CONFIG:-0}"
+RUN_CLIPROXY_CONFIG="${RUN_CLIPROXY_CONFIG:-1}"
+RUN_AUTH_SYNC="${RUN_AUTH_SYNC:-0}"
 RUN_VALIDATE="${RUN_VALIDATE:-1}"
 SKIP_WEIXIN="${SKIP_WEIXIN:-1}"
 SKIP_OFFICE_SKILLS="${SKIP_OFFICE_SKILLS:-0}"
@@ -32,10 +33,10 @@ Usage:
 Default flow:
   1. Install Clash when a sibling Clash package is present.
   2. Run base install from install-files/ or 02-新电脑初始化/.
-  3. Skip non-core apps unless --with-extras is passed.
+  3. Install Chrome, Obsidian, CC-Switch, DingTalk, and compatible extra apps.
   4. Try data-analysis / Office skills during base with a short timeout.
   5. Restore private-secrets when private-secrets/ is present.
-  6. Skip cliproxy-config unless explicitly enabled.
+  6. Re-apply Codex/OpenClaw CLIProxy routing after config restore.
   7. Validate OpenClaw and Codex by sending hello.
 
 Options:
@@ -44,11 +45,14 @@ Options:
   --skip-clash              Do not run Clash installer.
   --skip-base               Do not run base installer.
   --skip-secrets            Do not restore private-secrets.
-  --with-extras             Install non-core apps: Chrome, Obsidian, CC-Switch, AweSun, DingTalk.
+  --with-extras             Explicitly enable the default complete extra-app install.
+  --core-only               Skip Chrome, Obsidian, CC-Switch, AweSun, and DingTalk.
+  --skip-extras             Alias for --core-only.
   --with-office-skills      Re-run data-analysis / Office skills as a separate phase.
   --skip-office-skills      Do not install data-analysis / Office skills.
   --skip-validate           Do not send Codex/OpenClaw hello acceptance checks.
-  --with-cliproxy-config    Also point Codex/OpenClaw at local CLIProxyAPI.
+  --with-cliproxy-config    Re-apply the default Codex/OpenClaw CLIProxy routing.
+  --with-auth-sync          Install/refresh Codex Auth Sync Agent. First run needs CODEX_AUTH_SYNC_CODE.
   --with-weixin             Run Weixin connector setup now. This may wait for QR scan.
   -h, --help                Show this help.
 
@@ -57,6 +61,7 @@ Useful environment variables:
   CLASH_DIR=/path/to/01-Clash单独安装
   STATE_DIR=/path/to/state
   RUN_CLIPROXY_CONFIG=1
+  RUN_AUTH_SYNC=1
   RUN_EXTRAS=1
   RUN_OFFICE_SKILLS=1
   RUN_VALIDATE=0
@@ -99,6 +104,9 @@ for arg in "$@"; do
     --with-extras)
       RUN_EXTRAS=1
       ;;
+    --core-only|--skip-extras)
+      RUN_EXTRAS=0
+      ;;
     --with-office-skills)
       RUN_OFFICE_SKILLS=1
       SKIP_OFFICE_SKILLS=0
@@ -112,6 +120,9 @@ for arg in "$@"; do
       ;;
     --with-cliproxy-config)
       RUN_CLIPROXY_CONFIG=1
+      ;;
+    --with-auth-sync)
+      RUN_AUTH_SYNC=1
       ;;
     --with-weixin)
       SKIP_WEIXIN=0
@@ -283,7 +294,7 @@ main() {
   if [ "$RUN_EXTRAS" = "1" ]; then
     run_phase "extras" bash -lc "cd \"\$0\" && DRY_RUN=\"\$1\" INSTALL_PHASE=extras bash install-new-macbook.sh" "$dist_dir" "$DRY_RUN" || run_or_explain_failure "$?"
   else
-    log "Skipping non-core apps; enable with --with-extras"
+    log "Skipping non-core apps by explicit core-only request"
   fi
 
   if [ "$RUN_OFFICE_SKILLS" = "1" ]; then
@@ -306,7 +317,13 @@ main() {
   if [ "$RUN_CLIPROXY_CONFIG" = "1" ]; then
     run_phase "cliproxy-config" bash -lc "cd \"\$0\" && DRY_RUN=\"\$1\" INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh" "$dist_dir" "$DRY_RUN" || run_or_explain_failure "$?"
   else
-    log "Skipping cliproxy-config; enable with --with-cliproxy-config"
+    log "Skipping the final cliproxy-config pass because RUN_CLIPROXY_CONFIG=0"
+  fi
+
+  if [ "$RUN_AUTH_SYNC" = "1" ]; then
+    run_phase "auth-sync" bash -lc "cd \"\$0\" && DRY_RUN=\"\$1\" INSTALL_PHASE=auth-sync bash install-new-macbook.sh" "$dist_dir" "$DRY_RUN" || run_or_explain_failure "$?"
+  else
+    log "Skipping Codex Auth Sync Agent; enable with --with-auth-sync"
   fi
 
   if [ "$RUN_VALIDATE" = "1" ]; then

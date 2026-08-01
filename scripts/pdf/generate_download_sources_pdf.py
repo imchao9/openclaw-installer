@@ -273,7 +273,7 @@ def build_story():
             [
                 "运行 refresh 脚本后，确认 scripts/assets/download-sources.yml 中 SHA 已更新。",
                 "如果文件名或版本号变化，手动更新 docs/download-sources.md 和 scripts/assets/download-sources.yml。",
-                "同步到 install-files/openclaw-team/ 后重新打包。",
+                "统一保存到 canonical openclaw-team/ 后重新打包。",
                 "至少在一台测试 Mac 上运行 bash install-openclaw.sh --skip-secrets。",
                 "如果改动 Node、Codex、OpenClaw、CLIProxyAPI 或 Clash 相关包，再运行 INSTALL_PHASE=validate bash install-files/install-new-macbook.sh。",
             ]

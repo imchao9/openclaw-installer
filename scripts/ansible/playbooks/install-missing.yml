@@ -6,6 +6,10 @@
     remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
     install_force_selected_phases: true
     install_extra_apps: false
+    install_optional_components: false
+    install_sudo_password: ""
+    mechanical_run_id: ""
+    install_attempt: 1
     validate_after_install: true
 
   tasks:
@@ -54,7 +58,18 @@
 
         phase_rows=""
         overall_status=0
-        install_log_dir="reports/install-logs"
+        warning_count=0
+        run_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        run_started_epoch="$(date '+%s')"
+        raw_run_id="{{ mechanical_run_id }}"
+        if [ -z "$raw_run_id" ]; then
+          raw_run_id="$(date -u '+%Y%m%dT%H%M%SZ')"
+        fi
+        run_id="$(printf '%s' "$raw_run_id" | LC_ALL=C tr -cd 'A-Za-z0-9._-')"
+        [ -n "$run_id" ] || run_id="$(date -u '+%Y%m%dT%H%M%SZ')"
+        attempt="{{ install_attempt | int }}"
+        install_log_dir="reports/runs/$run_id/attempt-$attempt/install-logs"
+        attempt_result_json="reports/install-result-$run_id-attempt-$attempt.json"
         install_result_json="reports/install-result.json"
         mkdir -p "$install_log_dir"
 
@@ -62,17 +77,30 @@
           phase_name="$1"
           exit_code="$2"
           log_file="$3"
+          blocking="$4"
+          started_at="$5"
+          finished_at="$6"
+          duration_seconds="$7"
           if [ "$exit_code" = "0" ]; then
             phase_status="pass"
           else
             phase_status="fail"
-            overall_status=1
+            if [ "$blocking" = "true" ]; then
+              overall_status=1
+            else
+              warning_count=$((warning_count + 1))
+            fi
           fi
           tail_text="$(tail -n 80 "$log_file" 2>/dev/null || true)"
           row="$(printf '{'
           printf '"phase":"%s",' "$(printf '%s' "$phase_name" | json_escape)"
           printf '"status":"%s",' "$phase_status"
           printf '"exit_code":%s,' "$exit_code"
+          printf '"blocking":%s,' "$blocking"
+          printf '"attempt":%s,' "$attempt"
+          printf '"started_at":"%s",' "$started_at"
+          printf '"finished_at":"%s",' "$finished_at"
+          printf '"duration_seconds":%s,' "$duration_seconds"
           printf '"log":"%s",' "$(printf '%s' "$log_file" | json_escape)"
           printf '"tail":"%s"' "$(printf '%s' "$tail_text" | json_escape)"
           printf '}')"
@@ -84,15 +112,27 @@
         }
 
         write_install_result() {
+          run_finished_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          run_finished_epoch="$(date '+%s')"
+          run_duration_seconds=$((run_finished_epoch - run_started_epoch))
           if [ "$overall_status" = "0" ]; then
-            summary_status="pass"
+            if [ "$warning_count" -gt 0 ]; then
+              summary_status="pass_with_warnings"
+            else
+              summary_status="pass"
+            fi
           else
-            summary_status="fail"
+            summary_status="fail_required"
           fi
           {
             printf '{\n'
-            printf '  "schema_version": 1,\n'
-            printf '  "generated_at": "%s",\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            printf '  "schema_version": 2,\n'
+            printf '  "generated_at": "%s",\n' "$run_finished_at"
+            printf '  "run_id": "%s",\n' "$(printf '%s' "$run_id" | json_escape)"
+            printf '  "attempt": %s,\n' "$attempt"
+            printf '  "started_at": "%s",\n' "$run_started_at"
+            printf '  "finished_at": "%s",\n' "$run_finished_at"
+            printf '  "duration_seconds": %s,\n' "$run_duration_seconds"
             printf '  "host": "%s",\n' "$(hostname 2>/dev/null | json_escape)"
             printf '  "user": "%s",\n' "$(whoami 2>/dev/null | json_escape)"
             printf '  "status": "%s",\n' "$summary_status"
@@ -113,21 +153,66 @@
             printf '  },\n'
             printf '  "phases": [%s]\n' "$phase_rows"
             printf '}\n'
-          } > "$install_result_json"
-          echo "Install result written to: $install_result_json"
+          } > "$attempt_result_json"
+
+          /usr/bin/python3 - "$install_result_json" "$attempt_result_json" <<'PY'
+        import json
+        import sys
+        from pathlib import Path
+
+        latest_path = Path(sys.argv[1])
+        attempt_path = Path(sys.argv[2])
+        current = json.loads(attempt_path.read_text())
+        if latest_path.exists():
+            try:
+                previous = json.loads(latest_path.read_text())
+            except Exception:
+                previous = {}
+        else:
+            previous = {}
+
+        if previous.get("run_id") == current.get("run_id"):
+            phases = list(previous.get("phases") or []) + list(current.get("phases") or [])
+            current["phases"] = phases
+            current["attempt"] = max(int(previous.get("attempt") or 1), int(current.get("attempt") or 1))
+            current["started_at"] = previous.get("started_at") or current.get("started_at")
+            current["duration_seconds"] = int(previous.get("duration_seconds") or 0) + int(current.get("duration_seconds") or 0)
+            required_failed = any(p.get("status") == "fail" and p.get("blocking", True) for p in phases)
+            warnings = any(p.get("status") == "fail" and not p.get("blocking", True) for p in phases)
+            current["status"] = "fail_required" if required_failed else ("pass_with_warnings" if warnings else "pass")
+
+        latest_path.write_text(json.dumps(current, ensure_ascii=False, indent=2) + "\n")
+        PY
+          echo "Install attempt result written to: $attempt_result_json"
+          echo "Merged install result written to: $install_result_json"
         }
 
-        run_phase() {
+        run_phase_internal() {
           phase_name="$1"
-          shift
+          blocking="$2"
+          shift 2
+          phase_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          phase_started_epoch="$(date '+%s')"
           log_file="$install_log_dir/${phase_name}.log"
           echo "== Running install phase: $phase_name =="
           set +e
           "$@" 2>&1 | tee "$log_file"
           phase_rc="${PIPESTATUS[0]}"
           set -e
-          append_phase_result "$phase_name" "$phase_rc" "$log_file"
+          phase_finished_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          phase_finished_epoch="$(date '+%s')"
+          phase_duration_seconds=$((phase_finished_epoch - phase_started_epoch))
+          append_phase_result "$phase_name" "$phase_rc" "$log_file" "$blocking" \
+            "$phase_started_at" "$phase_finished_at" "$phase_duration_seconds"
           echo "== Install phase $phase_name exited with $phase_rc =="
+        }
+
+        run_phase() {
+          run_phase_internal "$1" true "${@:2}"
+        }
+
+        run_optional_phase() {
+          run_phase_internal "$1" false "${@:2}"
         }
 
         did_work=0
@@ -146,24 +231,15 @@
           run_phase base-core-apps bash -lc 'cd install-files && env INSTALL_PHASE=base SKIP_BASE_PKGS=1 SKIP_CODEX_CLI=1 SKIP_OPENCLAW_FIX=1 SKIP_OPENCLAW_SETUP=1 SKIP_OFFICE_SKILLS=1 SKIP_CLIPROXY=1 SKIP_POWER=1 SKIP_AUTOSTART=1 SKIP_WEIXIN_LAUNCHER=1 bash install-new-macbook.sh'
         fi
 
-        if [ "$PLAN_INSTALL_EXTRA_APPS" = "1" ] && [ "{{ install_extra_apps | bool }}" = "True" ]; then
-          did_work=1
-          run_phase extra-apps bash -lc 'cd install-files && env INSTALL_PHASE=extras bash install-new-macbook.sh'
-        fi
-
-        if [ "$PLAN_INSTALL_DINGTALK" = "1" ]; then
-          did_work=1
-          run_phase dingtalk bash -lc 'bundle_dir="install-files/openclaw-team"; [ -d "$bundle_dir" ] || bundle_dir="install-files/openclaw team"; dmg="$(find "$bundle_dir" -maxdepth 1 -iname "*DingTalk*.dmg" -print -quit)"; test -n "$dmg"; bash install-files/installer-core/scripts/install-dingtalk.sh "$dmg"'
-        fi
-
         if [ "$PLAN_REPAIR_OPENCLAW" = "1" ]; then
           did_work=1
           run_phase openclaw-repair bash -lc 'cd install-files && env INSTALL_PHASE=base SKIP_BASE_PKGS=1 SKIP_APPS=1 SKIP_CODEX_CLI=1 SKIP_DOUBAO=1 SKIP_WEIXIN_LAUNCHER=1 SKIP_OPENCLAW_SETUP=1 SKIP_OFFICE_SKILLS=1 SKIP_CLIPROXY=1 SKIP_POWER=1 SKIP_AUTOSTART=1 bash install-new-macbook.sh'
         fi
 
-        if [ "$PLAN_CONFIGURE_DOUBAO" = "1" ] && [ "$PLAN_INSTALL_CORE_APPS" != "1" ]; then
+        if [ "$PLAN_CONFIGURE_DOUBAO" = "1" ] && [ "$PLAN_INSTALL_CORE_APPS" != "1" ] && \
+           [ "{{ install_optional_components | bool }}" = "True" ]; then
           did_work=1
-          run_phase doubao-config bash -lc 'cd install-files && bash installer-core/scripts/configure-doubao-input.sh'
+          run_optional_phase doubao-config bash -lc 'cd install-files && bash installer-core/scripts/configure-doubao-input.sh'
         fi
 
         if [ "$PLAN_FIX_PATH" = "1" ] && [ "$PLAN_RUN_CODEX_CLI" != "1" ]; then
@@ -205,6 +281,14 @@
           run_phase cliproxy bash -lc 'cd install-files && INSTALL_PHASE=cliproxy bash install-new-macbook.sh'
         fi
 
+        # A complete install requires Chrome, Obsidian, CC-Switch and DingTalk.
+        # Run them only after CLIProxyAPI and agent configuration are complete.
+        if { [ "$PLAN_INSTALL_EXTRA_APPS" = "1" ] || [ "$PLAN_INSTALL_DINGTALK" = "1" ]; } && \
+           [ "{{ install_extra_apps | bool }}" = "True" ]; then
+          did_work=1
+          run_phase extra-apps bash -lc 'cd install-files && env INSTALL_PHASE=extras bash install-new-macbook.sh'
+        fi
+
         if [ "$did_work" = "0" ]; then
           echo "No missing install phases detected."
         fi
@@ -212,6 +296,8 @@
         exit "$overall_status"
       args:
         executable: /bin/bash
+      environment:
+        SUDO_PASSWORD: "{{ install_sudo_password }}"
       register: install_result
       changed_when: "'No missing install phases detected.' not in install_result.stdout"
       failed_when: false

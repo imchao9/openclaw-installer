@@ -5,8 +5,10 @@
   vars:
     remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
     sync_private_secrets: false
-    local_dist_dir: "{{ playbook_dir }}/../../../install-files"
-    local_entrypoint: "{{ playbook_dir }}/../../../install-openclaw.sh"
+    local_package_build_root: "{{ playbook_dir }}/../../../.package-build"
+    local_layer_dir: "{{ playbook_dir }}/../../../upload-packages"
+    local_layer_index: "{{ local_layer_dir }}/openclaw-layer-index.json"
+    local_assemble_script: "{{ playbook_dir }}/../../assemble-layered-package.sh"
     local_fetch_script: "{{ playbook_dir }}/../../fetch-package-over-http.sh"
     local_private_secrets_dir: "{{ playbook_dir }}/../../../private-secrets"
     sync_clash_package: false
@@ -20,31 +22,88 @@
       ansible.builtin.set_fact:
         effective_sync_transport: "{{ sync_transport if sync_transport != 'auto' else ('http' if package_http_base_url | length > 0 else 'rsync') }}"
 
-    - name: Read remote macOS version for HTTP package selection
+    - name: Read remote macOS version for package selection
       ansible.builtin.command: sw_vers -productVersion
       register: remote_macos_version
       changed_when: false
-      when: effective_sync_transport == 'http' and package_profile == 'auto'
 
-    - name: Read remote machine architecture for HTTP package selection
+    - name: Read remote machine architecture for package selection
       ansible.builtin.command: uname -m
       register: remote_machine_arch
       changed_when: false
-      when: effective_sync_transport == 'http' and package_profile == 'auto'
 
-    - name: Resolve HTTP package profile
+    - name: Resolve expected target package profile
+      ansible.builtin.set_fact:
+        expected_package_profile: >-
+          {{
+            'macos26-arm64'
+            if ((remote_macos_version.stdout.split('.')[0] | int) >= 26 and remote_machine_arch.stdout == 'arm64')
+            else (
+              'macos15-x64'
+              if ((remote_macos_version.stdout.split('.')[0] | int) == 15 and remote_machine_arch.stdout == 'x86_64')
+              else (
+                'macos14-x64'
+                if ((remote_macos_version.stdout.split('.')[0] | int) == 14 and remote_machine_arch.stdout == 'x86_64')
+                else (
+                  'macos15-arm64'
+                  if ((remote_macos_version.stdout.split('.')[0] | int) == 15 and remote_machine_arch.stdout == 'arm64')
+                  else 'unsupported'
+                )
+              )
+            )
+          }}
+
+    - name: Resolve selected package profile
       ansible.builtin.set_fact:
         resolved_package_profile: >-
           {{
             package_profile
             if package_profile != 'auto'
-            else (
-              'macos26-arm64'
-              if ((remote_macos_version.stdout.split('.')[0] | int) >= 26 and remote_machine_arch.stdout == 'arm64')
-              else ('macos15-x64' if remote_machine_arch.stdout == 'x86_64' else 'macos15-arm64')
-            )
+            else expected_package_profile
           }}
-      when: effective_sync_transport == 'http'
+
+    - name: Block unsupported or mismatched package profiles
+      ansible.builtin.assert:
+        that:
+          - expected_package_profile != 'unsupported'
+          - resolved_package_profile == expected_package_profile
+        fail_msg: >-
+          Package profile gate failed: target macOS={{ remote_macos_version.stdout | trim }}
+          arch={{ remote_machine_arch.stdout | trim }} expects {{ expected_package_profile }},
+          selected={{ resolved_package_profile }}.
+
+    - name: Resolve profile-specific rsync source
+      ansible.builtin.set_fact:
+        resolved_local_profile_dir: "{{ local_package_build_root }}/assembled/openclaw-{{ resolved_package_profile }}"
+
+    - name: Assemble profile-specific rsync source from verified layers
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ local_assemble_script }}"
+          - --profile
+          - "{{ resolved_package_profile }}"
+          - --index
+          - "{{ local_layer_index }}"
+          - --packages-dir
+          - "{{ local_layer_dir }}"
+          - --output-dir
+          - "{{ resolved_local_profile_dir }}"
+      environment:
+        OVERWRITE_ASSEMBLED: "1"
+      register: local_layer_assembly
+      changed_when: "'Layered package ready:' in local_layer_assembly.stdout"
+      delegate_to: localhost
+      when: effective_sync_transport == 'rsync'
+
+    - name: Verify local rsync manifest declares the selected profile and architecture
+      ansible.builtin.assert:
+        that:
+          - (lookup('ansible.builtin.file', resolved_local_profile_dir + '/install-files/DIST_MANIFEST.json') | from_json).profile == resolved_package_profile
+          - (lookup('ansible.builtin.file', resolved_local_profile_dir + '/install-files/DIST_MANIFEST.json') | from_json).target_arch == (remote_machine_arch.stdout | trim)
+        fail_msg: "Local package manifest does not match profile {{ resolved_package_profile }} and arch {{ remote_machine_arch.stdout | trim }}"
+      delegate_to: localhost
+      when: effective_sync_transport == 'rsync'
 
     - name: Require package HTTP base URL for HTTP sync
       ansible.builtin.fail:
@@ -57,16 +116,9 @@
         state: directory
         mode: "0700"
 
-    - name: Upload unified installer entrypoint
-      ansible.builtin.copy:
-        src: "{{ local_entrypoint }}"
-        dest: "{{ remote_run_dir }}/install-openclaw.sh"
-        mode: "0755"
-      when: effective_sync_transport == 'rsync'
-
-    - name: Sync install-files directory
+    - name: Sync profile-specific package directory
       ansible.posix.synchronize:
-        src: "{{ local_dist_dir }}"
+        src: "{{ resolved_local_profile_dir }}/"
         dest: "{{ remote_run_dir }}/"
         delete: true
       when: effective_sync_transport == 'rsync'
@@ -78,13 +130,68 @@
         mode: "0755"
       when: effective_sync_transport == 'http'
 
-    - name: Download and extract package over HTTP with resume
+    - name: Upload layered package assembler
+      ansible.builtin.copy:
+        src: "{{ local_assemble_script }}"
+        dest: "/tmp/assemble-layered-package.sh"
+        mode: "0755"
+      when: effective_sync_transport == 'http'
+
+    - name: Download, verify, and assemble package layers over HTTP with resume
       ansible.builtin.command: bash /tmp/fetch-package-over-http.sh
       environment:
-        PACKAGE_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-{{ resolved_package_profile }}.tar.zst"
-        CHECKSUM_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-{{ resolved_package_profile }}.sha256"
+        PACKAGE_PROFILE: "{{ resolved_package_profile }}"
+        PACKAGE_BASE_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}"
+        LAYER_INDEX_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-layer-index.json"
+        LAYER_INDEX_CHECKSUM_URL: "{{ package_http_base_url | regex_replace('/+$', '') }}/openclaw-layer-index.sha256"
+        ASSEMBLER_SCRIPT: "/tmp/assemble-layered-package.sh"
         REMOTE_RUN_DIR: "{{ remote_run_dir }}"
       when: effective_sync_transport == 'http'
+
+    - name: Verify synced package manifest matches the target profile
+      ansible.builtin.shell: |
+        set -euo pipefail
+        manifest="{{ remote_run_dir }}/install-files/DIST_MANIFEST.json"
+        test -f "$manifest"
+        /usr/bin/python3 - "$manifest" "{{ resolved_package_profile }}" "{{ remote_machine_arch.stdout | trim }}" <<'PY'
+        import hashlib
+        import json
+        import sys
+        from pathlib import Path
+
+        manifest_path = Path(sys.argv[1])
+        expected_profile = sys.argv[2]
+        expected_arch = sys.argv[3]
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("profile") != expected_profile:
+            raise SystemExit(f"profile mismatch: {manifest.get('profile')} != {expected_profile}")
+        if manifest.get("target_arch") != expected_arch:
+            raise SystemExit(f"architecture mismatch: {manifest.get('target_arch')} != {expected_arch}")
+        root = manifest_path.parent
+        for asset in manifest.get("required_assets", []):
+            path = root / asset["path"]
+            if not path.is_file():
+                raise SystemExit(f"required asset missing: {path}")
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != asset.get("sha256"):
+                raise SystemExit(f"checksum mismatch: {asset['path']}")
+            if path.stat().st_size != asset.get("size_bytes"):
+                raise SystemExit(f"size mismatch: {asset['path']}")
+        print(f"verified profile={expected_profile} arch={expected_arch} assets={len(manifest.get('required_assets', []))}")
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Clean local assembled rsync source after target verification
+      ansible.builtin.file:
+        path: "{{ resolved_local_profile_dir }}"
+        state: absent
+      delegate_to: localhost
+      when: effective_sync_transport == 'rsync'
 
     - name: Sync private-secrets directory when explicitly enabled
       ansible.posix.synchronize:

@@ -9,13 +9,42 @@ The recommended flow is:
 bootstrap-clt -> preflight -> scan -> sync -> install missing -> validate -> final scan -> collect reports
 ```
 
+`macOS 14.x + x86_64` resolves to `macos14-x64`. This profile requires
+compatible Command Line Tools to be present before apply and bundles only
+Intel-compatible Codex, Clash Party, DingTalk, and CLIProxyAPI assets. See
+[`docs/INTEL_MACOS14_SETUP.md`](../../docs/INTEL_MACOS14_SETUP.md).
+
+For normal machine-by-machine delivery, prefer the mechanical two-boundary runner instead of invoking each playbook interactively:
+
+```bash
+RUN_ID="$(date -u '+%Y%m%dT%H%M%SZ')"
+
+bash scripts/ansible/mechanical-rollout.sh assess \
+  -i /tmp/openclaw-inventory.ini \
+  --run-id "$RUN_ID"
+
+# AI or a human reviews mechanical-assessment-summary.json exactly once here.
+
+bash scripts/ansible/mechanical-rollout.sh apply \
+  -i /tmp/openclaw-inventory.ini \
+  --run-id "$RUN_ID" \
+  --approve-assessment \
+  --private-secrets \
+  --extra-apps \
+  --prompt-sudo-password
+```
+
+The apply boundary is deterministic: profile gate, CLT bootstrap, profile-specific sync, install, one targeted repair pass, validation, final scan, and report collection.
+It does not call AI between phases.
+See `docs/mechanical-rollout.md` for report semantics, exit codes, credential handling, and rerun behavior.
+
 `bootstrap-clt` uses raw SSH, so it can run before Python-backed Ansible modules
 work on a fresh macOS install. It detects the remote architecture with
 the remote macOS version first: macOS 15.x receives
 `Command_Line_Tools_for_Xcode_16.4.dmg`; macOS 26.2+ then uses `uname -m` so
 `arm64` targets receive `Command_Line_Tools_26.5_Apple_silicon.dmg` when
 available, and Intel or fallback targets receive
-`openclaw-team/Command_Line_Tools_26.5_Universal.dmg`.
+`upload-packages/source-assets/openclaw-team/Command_Line_Tools_26.5_Universal.dmg`.
 
 `private-secrets/ips.txt` contains secrets. Do not use it directly as inventory. Generate an
 inventory that contains IP addresses only:
@@ -102,7 +131,7 @@ ansible-playbook -i /tmp/openclaw-inventory.ini scripts/ansible/playbooks/scan.y
 Sync the current package:
 
 ```bash
-PORT=8765 bash scripts/upload-packages-package-http.sh
+PORT=8765 bash scripts/serve-package-http.sh
 
 OPENCLAW_PACKAGE_BASE_URL=http://<installer-host-ip>:8765 \
 LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
@@ -111,10 +140,11 @@ ansible-playbook -i /tmp/openclaw-inventory.ini scripts/ansible/playbooks/sync.y
   --ask-pass
 ```
 
-When `OPENCLAW_PACKAGE_BASE_URL` is set, `sync.yml` uses target-side
-`curl -C -` resume downloads for `upload-packages/openclaw-macos26-arm64.tar.zst` or
-`upload-packages/openclaw-macos15-arm64.tar.zst`, selected from the remote macOS major
-version. If the URL is not set, the playbook falls back to the older rsync path.
+When `OPENCLAW_PACKAGE_BASE_URL` is set, `sync.yml` downloads
+`openclaw-layer-index.json`, selects the common, architecture, and CLT layers for
+the detected profile, resumes each layer with `curl -C -`, verifies SHA-256, and
+assembles the normal single install directory on the target. Without the URL,
+the rsync path assembles the same layers locally before synchronization.
 
 Install only missing checkpoints:
 
@@ -225,7 +255,7 @@ cd ~/openclaw-installer-run
 bash install-openclaw.sh --skip-validate
 bash install-openclaw.sh --skip-base
 bash install-openclaw.sh --skip-secrets
-bash install-openclaw.sh --with-cliproxy-config
+INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 bash install-openclaw.sh --with-weixin
 ```
 

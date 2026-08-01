@@ -2,19 +2,22 @@
 
 更新时间：2026-06-19
 
-这个文件记录 `openclaw-team/` 里离线安装包的公开来源，方便后续定期更新。真正给脚本读取的清单在 `scripts/assets/download-sources.yml`。
+这个文件记录 `upload-packages/source-assets/openclaw-team/` 里离线安装包的公开来源，方便后续定期更新。真正给脚本读取的清单在 `scripts/assets/download-sources.yml`。
 
 当前策略：平时只保存下载源；准备重新打上传包前，再手动刷新公开直链资产。
 
 ## 更新原则
 
-- 可稳定 `HEAD` 的直链可以定期检查，发现 SHA 变化后下载到 `openclaw-team/`，再跑安装验证。
+- 可稳定 `HEAD` 的直链可以定期检查，发现 SHA 变化后下载到 `upload-packages/source-assets/openclaw-team/`，再跑安装验证。
 - GitHub Release 类软件优先看最新 release，再选择 macOS arm64/aarch64 的 `.dmg` 或 `.pkg`。
 - 钉钉、向日葵这类厂商页的最终文件 URL 可能临时变化，先记录官方下载页，更新时人工下载。
 - Apple Command Line Tools 属于 Apple Developer 下载，当前按固定人工来源处理；它不进入定期直链检查。
 - 豆包输入法不打进安装包，也不自动安装；用户需要时从官方页面手动下载。
 
 ## 可定期检查的直链
+
+下表的 `openclaw-team/...` 是资产文件名；实际存放根目录统一为
+`upload-packages/source-assets/openclaw-team/`。
 
 | 软件 | 当前文件 | 当前版本 | 下载地址 | 来源页 | 本地 SHA256 |
 | --- | --- | --- | --- | --- | --- |
@@ -71,10 +74,10 @@ bash scripts/refresh-download-assets.sh --asset codex-app
 ## 更新后验收
 
 1. 先运行 `bash scripts/refresh-download-assets.sh --dry-run` 预览会下载哪些公开直链资产。
-2. 准备打包时运行 `bash scripts/refresh-download-assets.sh`，脚本会下载到 `openclaw-team/` 并更新 `scripts/assets/download-sources.yml` 里的 SHA。
+2. 准备打包时运行 `bash scripts/refresh-download-assets.sh`，脚本会下载到 `upload-packages/source-assets/openclaw-team/` 并更新 `scripts/assets/download-sources.yml` 里的 SHA。
 3. 人工来源的软件按表格下载或保持不变：Apple Command Line Tools、钉钉、向日葵、豆包输入法。
 4. 如果下载后的文件名或版本号变化，手动更新 `scripts/assets/download-sources.yml` 和本文件中的版本、URL、文件名。
-5. 同步到 `install-files/openclaw-team/` 后重新打包；如果用 `build-dist.sh`，可以直接用 `REFRESH_DOWNLOAD_ASSETS=1 OVERWRITE_DIST=1 bash scripts/build-dist.sh all`。
+5. 下载资产统一保存到 canonical `upload-packages/source-assets/openclaw-team/` 后重新打包；可以直接用 `REFRESH_DOWNLOAD_ASSETS=1 OVERWRITE_DIST=1 bash scripts/build-dist.sh all`。
 6. 至少在一台测试 Mac 上跑：
 
 ```bash

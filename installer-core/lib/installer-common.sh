@@ -10,6 +10,27 @@ log() {
   printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"
 }
 
+record_phase_timing() {
+  local phase="$1" started_epoch="$2" finished_epoch="$3" status="$4"
+  local duration_seconds result report
+  report="${INSTALL_PHASE_TIMING_FILE:-${ROOT:-.}/reports/install-phase-timing.jsonl}"
+  duration_seconds=$((finished_epoch - started_epoch))
+  [ "$duration_seconds" -ge 0 ] || duration_seconds=0
+  if [ "$status" = "0" ]; then
+    result="pass"
+  else
+    result="fail"
+  fi
+  if is_dry_run; then
+    dry_log "Would record phase timing: $phase $result ${duration_seconds}s"
+    return 0
+  fi
+  mkdir -p "$(dirname "$report")"
+  printf '{"phase":"%s","status":"%s","duration_seconds":%s}\n' \
+    "$phase" "$result" "$duration_seconds" >> "$report"
+  log "Phase timing: $phase $result ${duration_seconds}s ($report)"
+}
+
 record_problem() {
   local msg="$*"
   INSTALL_PROBLEMS+=("$msg")
@@ -28,12 +49,30 @@ run_with_timeout() {
   elif command -v timeout >/dev/null 2>&1; then
     timeout "$seconds" "$@"
   else
-    perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
+    perl -e '
+      my $seconds = shift @ARGV;
+      my $pid = fork();
+      die "fork failed: $!\n" unless defined $pid;
+      if ($pid == 0) {
+        setpgrp(0, 0) or die "setpgrp failed: $!\n";
+        exec @ARGV or die "exec failed: $!\n";
+      }
+      local $SIG{ALRM} = sub {
+        kill "TERM", -$pid;
+        select undef, undef, undef, 1;
+        kill "KILL", -$pid;
+        waitpid($pid, 0);
+        exit 124;
+      };
+      alarm $seconds;
+      waitpid($pid, 0);
+      exit($? == -1 ? 1 : $? >> 8);
+    ' "$seconds" "$@"
   fi
 }
 
 run_optional_step() {
-  local label="$1" timeout="$2" pid status elapsed
+  local label="$1" timeout="$2" pid status elapsed monitor_was_on
   shift
   shift
 
@@ -44,14 +83,25 @@ run_optional_step() {
 
   log "Starting optional step: $label (timeout ${timeout}s)"
   set +e
-  ( set -e; "$@" ) &
+  monitor_was_on=0
+  case "$-" in
+    *m*) monitor_was_on=1 ;;
+  esac
+  # Monitor mode gives the background subshell its own process group. This
+  # lets a timeout terminate the whole installer tree instead of only its
+  # immediate shell and leaving npm/hdiutil/installer descendants running.
+  set -m
+  ( set +m; set -e; "$@" ) &
   pid="$!"
+  if [ "$monitor_was_on" = "0" ]; then
+    set +m
+  fi
   elapsed=0
   while kill -0 "$pid" >/dev/null 2>&1; do
     if [ "$elapsed" -ge "$timeout" ]; then
-      kill "$pid" >/dev/null 2>&1 || true
+      kill -TERM -- "-$pid" >/dev/null 2>&1 || kill "$pid" >/dev/null 2>&1 || true
       sleep 2
-      kill -9 "$pid" >/dev/null 2>&1 || true
+      kill -KILL -- "-$pid" >/dev/null 2>&1 || kill -9 "$pid" >/dev/null 2>&1 || true
       wait "$pid" >/dev/null 2>&1
       status=124
       break

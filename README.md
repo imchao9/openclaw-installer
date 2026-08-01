@@ -1,10 +1,14 @@
 # OpenClaw 新 MacBook 安装与打包
 
-当前交付分五块：
+当前交付主要由以下部分组成：
 
-- `install-files/`：给新 MacBook 的非敏感安装目录。
+- `upload-packages/source-assets/openclaw-team/`：下载型大安装资产的唯一来源。
+- `openclaw-team/`：Git 跟踪的轻量修复脚本和启动器，不存放大安装包。
+- `install-files/`：按 profile 临时生成、给新 MacBook 使用的非敏感安装目录；验包后不在仓库根目录长期保留。
 - `private-secrets/`：密钥、登录态、订阅地址和私密说明，单独保存，默认不进入包。
-- `upload-packages/openclaw.zip`：需要局域网单文件分发时使用的最终 zip。
+- `upload-packages/openclaw-*-common.tar.zst` / `openclaw-*-clt.tar.zst`：按公共、架构和系统 CLT 分层交付；大安装文件统一放此处，不进入 Git。
+- `deliveries/OpenClaw-Install-<profile>/`：按目标架构组装的完整非敏感交付目录，可整体复制给安装人员，不进入 Git。
+- `upload-packages/openclaw-layer-index.json`：声明每个 profile 需要的层、架构和最终资产哈希。
 - `docs/user-install-guide.md` / `docs/user-install-guide.pdf`：给安装用户的简明安装说明。
 - `docs/download-sources.md` / `scripts/assets/download-sources.yml`：离线安装包的下载源、版本、SHA 和打包前刷新清单。
 - `openclaw-install-content-20260607/01-新电脑初始化/`：百度网盘可上传的非敏感初始化包，不含 Clash。
@@ -17,14 +21,15 @@ Git 仓库只保存可审计、可重建的源码、脚本、Markdown 文档和�
 - `install-files/`
 - `.package-build/`
 - `upload-packages/` 里的压缩包和校验文件
-- `openclaw-team/` 里的 DMG/PKG/tgz 离线安装包
+- `deliveries/` 里的完整离线交付目录
+- `upload-packages/source-assets/openclaw-team/` 里的 DMG/PKG/tgz 离线安装包
 - `docs/*.pdf`
 - `private-secrets/`
 
-从源文件重建非源产物：
+从源文件重建分层交付产物：
 
 ```bash
-bash scripts/build-source-artifacts.sh --overwrite
+OVERWRITE_LAYERED_DIST=1 bash scripts/build-layered-dist.sh
 ```
 
 只重建 PDF 文档、不压缩大安装包：
@@ -34,6 +39,15 @@ bash scripts/build-source-artifacts.sh --skip-packages
 ```
 
 ## 最新安装入口
+
+第一次使用请先看 [`docs/QUICK_INSTALL.md`](docs/QUICK_INSTALL.md)，里面包含支持机型、远程完整安装、离线安装和验收命令。
+
+macOS 14 Intel 机器使用独立 `macos14-x64` profile，不要复用 Apple Silicon
+或 macOS 15 包。构建、Auth Sync 与验收命令见
+[`docs/INTEL_MACOS14_SETUP.md`](docs/INTEL_MACOS14_SETUP.md)。
+
+远程批量或单机标准装机推荐使用“assessment -> AI 一次判断 -> mechanical apply -> AI 最终分析”的机械流程。
+入口和报告说明见 [`docs/mechanical-rollout.md`](docs/mechanical-rollout.md)。
 
 推荐把以下目录放在同一个父目录后，在目标机器执行一个入口：
 
@@ -51,16 +65,16 @@ some-folder/
 bash install-openclaw.sh
 ```
 
-这个入口会自动执行：Clash 单独安装包（如果存在）-> base 阶段 -> office-skills 阶段 -> secrets 阶段（如果找到 `private-secrets/`）。默认跳过微信扫码连接，避免安装过程卡在二维码等待；需要立即连接微信时加 `--with-weixin`。出错后修复脚本或环境，再重跑同一条命令即可；已完成阶段会用 `.openclaw-install-state/` 标记跳过。如需强制重跑已完成阶段：
+这个入口会自动执行：Clash 单独安装包（如果存在）-> base 阶段 -> extras 阶段 -> secrets 阶段（如果找到 `private-secrets/`）-> CLIProxy 路由适配 -> 验收。默认完整安装 Chrome、Obsidian、CC-Switch 和钉钉；只有明确使用 `--core-only` 时才跳过。默认跳过微信扫码连接，避免安装过程卡在二维码等待；需要立即连接微信时加 `--with-weixin`。出错后修复脚本或环境，再重跑同一条命令即可；已完成阶段会用 `.openclaw-install-state/` 标记跳过。如需强制重跑已完成阶段：
 
 ```bash
 bash install-openclaw.sh --force
 ```
 
-`cliproxy-config` 默认不自动执行，避免无意改写 Codex/OpenClaw 模型入口；需要时显式运行：
+`cliproxy-config` 现在是完整安装的默认步骤。每次恢复 `~/.codex/config.toml` 和 `~/.codex/auth.json` 后都会重新适配本机 CLIProxyAPI，避免私有配置覆盖路由；也可以单独重跑：
 
 ```bash
-bash install-openclaw.sh --with-cliproxy-config
+INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 ```
 
 手动分阶段备用流程如下。先单独安装 Clash 并打开系统代理：
@@ -70,7 +84,13 @@ cd 05-Clash单独安装
 bash install-clash.sh
 ```
 
-然后安装非密钥内容：
+完整安装（包含 Chrome、Obsidian、CC-Switch、钉钉、CLIProxyAPI 及可用的私有配置）使用：
+
+```bash
+INSTALL_PHASE=all bash install-new-macbook.sh
+```
+
+只安装核心软件、刻意跳过额外 App 时使用：
 
 ```bash
 INSTALL_PHASE=base bash install-new-macbook.sh
@@ -90,12 +110,12 @@ INSTALL_PHASE=secrets bash install-new-macbook.sh
 
 ## 当前 base 阶段会做什么
 
-- 检查 Command Line Tools 是否已存在；不存在且包内有兼容的离线 DMG 时自动安装。macOS 15.x 使用 `openclaw-team/Command_Line_Tools_for_Xcode_16.4.dmg`；macOS 26.2+ 使用 CLT 26.5。
-- Command Line Tools 会按系统和机器架构选包：macOS 26.2+ 的 Apple Silicon 优先使用 `openclaw-team/Command_Line_Tools_26.5_Apple_silicon.dmg`；Intel 或 fallback 场景使用 `openclaw-team/Command_Line_Tools_26.5_Universal.dmg`。当前 core 上传包只带对应 profile 的 CLT，不带 Universal fallback。
+- 检查 Command Line Tools 是否已存在；不存在且包内有兼容的离线 DMG 时自动安装。macOS 15.x 使用 `upload-packages/source-assets/openclaw-team/Command_Line_Tools_for_Xcode_16.4.dmg`；macOS 26.2+ 使用 CLT 26.5。
+- Command Line Tools 会按系统和机器架构选包：macOS 26.2+ 的 Apple Silicon 优先使用 `upload-packages/source-assets/openclaw-team/Command_Line_Tools_26.5_Apple_silicon.dmg`；Intel 或 fallback 场景使用 `upload-packages/source-assets/openclaw-team/Command_Line_Tools_26.5_Universal.dmg`。当前 core 上传包只带对应 profile 的 CLT，不带 Universal fallback。
 - 跳过 Homebrew 自动安装；如目标机需要 brew，手动安装或后续单独处理。
-- 安装 Node.js v24.16.0，并执行 `npm install -g @openai/codex` 安装 Codex CLI。
+- 安装 Node.js v24.16.0；Codex CLI 优先复用 Codex.app 内置二进制，仅在不可用时回退到 `npm install -g @openai/codex`。
 - 安装 Codex、OpenClaw。
-- Clash Verge、Clash Party 仍然单独安装，不进入百度网盘初始化包。
+- 按 profile 安装对应架构的 Clash Verge、Clash Party；`macos14-x64` 使用 Intel PKG。
 - 安装 `OpenClaw Dashboard.app`、`OpenClaw Weixin Connect.app` 和对应 `.command` 到系统级 `/Applications`，方便在 Finder 的“应用程序”里直接打开；默认不启动扫码连接流程。
 - 运行 OpenClaw CLI/Gateway 修复脚本。
 - 运行 `installer-core/install.sh`，并在第一阶段强制 `SKIP_DOTFILES=1 SKIP_SECRETS=1`。
@@ -103,7 +123,7 @@ INSTALL_PHASE=secrets bash install-new-macbook.sh
 - 安装 CLIProxyAPI 到 `~/.local/bin/CLIProxyAPI`，写入用户级 LaunchAgent，默认监听 `http://127.0.0.1:8317/v1`。
 - 配置接电不休眠、OpenClaw Gateway 自恢复、Cross-Session Tasks skill 和 Clash Party 登录后自动打开。
 
-Google Chrome、Obsidian、CC-Switch、向日葵、钉钉属于 `extras` 阶段；豆包输入法不再自动安装，需要用户手动安装：
+Google Chrome、Obsidian、CC-Switch、钉钉属于完整安装必须通过验收的 `extras` 阶段。ARM 目标在包内存在兼容资产时还会安装向日葵；Intel 目标不会因为缺少 ARM 专用向日葵包而判整机失败。`INSTALL_PHASE=all` 和机械完整安装会自动包含这些兼容 App；仅执行 `base` 时可按需补跑。豆包输入法不再自动安装，需要用户手动安装：
 
 ```bash
 INSTALL_PHASE=extras bash install-new-macbook.sh
@@ -122,7 +142,7 @@ INSTALL_PHASE=extras bash install-new-macbook.sh
 - 从私密说明提取 Clash 订阅 URL，生成 `~/Applications/OpenClaw Clash Party Setup.app` 和 `.command` 助手。
 - 密钥文件恢复后重跑 Seedream key 注入。
 
-## 可选：Codex/OpenClaw 统一走 CLIProxyAPI
+## Codex/OpenClaw 默认统一走 CLIProxyAPI
 
 如果要让 Codex 和 OpenClaw 都使用本机 CLIProxyAPI，执行：
 
@@ -132,7 +152,7 @@ INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 
 该步骤会备份并改写：
 
-- `~/.codex/auth.json`：写入 `OPENAI_API_KEY=open-api`。
+- `~/.codex/auth.json`：写入 CLIProxyAPI `config.yaml` 中当前生效的首个 `api-keys` 值；没有现成值时使用默认 `open-api`。
 - `~/.codex/config.toml`：设置 `model_provider="custom"`、`model="gpt-5.5"`、`base_url="http://127.0.0.1:8317/v1"`。
 - `~/.openclaw/openclaw.json`：设置 `cliproxy/gpt-5.5` provider 为默认模型，并移除旧的 `matrixrouter` / `anthropic` provider。
 
@@ -221,7 +241,7 @@ bash install-openclaw.sh --skip-base
 # 跳过 secrets，只做公开包相关阶段
 bash install-openclaw.sh --skip-secrets
 
-# 额外启用 cliproxy-config
+# 显式重跑 cliproxy-config（完整安装默认已执行）
 bash install-openclaw.sh --with-cliproxy-config
 
 # 显式启用微信扫码连接流程；默认跳过，避免无人值守安装卡住
@@ -403,19 +423,37 @@ INSTALL_PHASE=deepseek bash install-new-macbook.sh
 DEEPSEEK_KEY_NAME=dp2 INSTALL_PHASE=deepseek bash install-new-macbook.sh
 ```
 
-## 重新生成 install-files
+## 按需生成 install-files
 
-`install-files/` 是给新电脑复制的目录，里面包含安装入口、文档、`installer-core/` 和 `openclaw-team/` 离线资产，不包含密钥。core 上传包只带对应 profile 需要的 CLT：macOS 15 包带 `Command_Line_Tools_for_Xcode_16.4.dmg`，macOS 26 Apple Silicon 包带 `Command_Line_Tools_26.5_Apple_silicon.dmg`。`openclaw-team/Command_Line_Tools_26.5_Universal.dmg` 保留给 Ansible 或手动 fallback，不默认进入 core 包。
-
-```bash
-env OVERWRITE_DIST=1 bash scripts/build-dist.sh
-```
-
-如果只是首次生成，且没有旧 `install-files/`：
+`upload-packages/source-assets/openclaw-team/` 是下载型大安装资产的唯一来源；根目录 `openclaw-team/` 只保留 Git 跟踪的小型脚本和启动器。根目录 `install-files/` 是可重建的临时分发目录，不作为资产源长期保留，也不包含密钥。正常交付使用 layer index 自动组合 common、架构层和 CLT 层。
 
 ```bash
-bash scripts/build-dist.sh
+OVERWRITE_LAYERED_DIST=1 bash scripts/build-layered-dist.sh
+
+OVERWRITE_ASSEMBLED=1 \
+bash scripts/assemble-layered-package.sh \
+  --profile macos14-x64 \
+  --output-dir /tmp/openclaw-macos14-x64
 ```
+
+旧式单 profile standalone 包只用于兼容或专项排障：
+
+```bash
+OVERWRITE_DIST=1 bash scripts/build-dist.sh macos14-x64
+```
+
+分层验包完成后应删除根 `install-files/`、本次 `.package-build/<profile>/` 和 `.layer-build/`；
+`.build-cache/` 中的 CLIProxy 架构缓存继续保留。
+
+### 给他人复制的完整离线交付目录
+
+不要复制整个 Git 仓库。按目标机器架构组装一份完整交付目录：
+
+```bash
+bash scripts/build-offline-delivery.sh --profile macos26-arm64
+```
+
+产物在 `deliveries/OpenClaw-Install-macos26-arm64/`，将该目录整体复制即可。`private-secrets/` 不会被该命令带入交付物；如确有需要，只能单独、私下同步给受信任人员。
 
 ## 重新打包 zip
 
@@ -481,11 +519,12 @@ REMOTE_HOST=cm@192.168.0.250 REMOTE_PASSWORD='123456' bash scripts/apply-person-
 - `installer-core/lib/installer-private.sh`：DeepSeek fallback、private-secrets 恢复、电源和启动恢复。
 - `installer-core/lib/installer-phases.sh`：base、extras、secrets、cliproxy、validate 等阶段编排。
 - `install-openclaw.sh`：目标机统一安装入口，可自动串起 Clash、base、secrets 和可选 `cliproxy-config`。
-- `scripts/build-dist.sh`：重建非敏感 `install-files/`，默认排除 Clash 安装包。
+- `scripts/build-dist.sh`：从 canonical `upload-packages/source-assets/openclaw-team/` 生成 profile staging 和最终归档。
 - `scripts/make-package.sh`：生成 zip，避免误带敏感文件和嵌套 zip。
 - `scripts/apply-person-key.sh`：按人员或显式 key 替换 OpenClaw/Codex key。
 - `scripts/installer-core-mac-autostart.sh`：配置接电不休眠、OpenClaw Gateway 自恢复、Clash Party 登录后自动启动。
-- `openclaw-team/`：离线安装包和 OpenClaw 修复脚本。
+- `openclaw-team/`：Git 跟踪的 OpenClaw 修复脚本和启动器。
+- `upload-packages/source-assets/openclaw-team/`：Git 忽略的 DMG/PKG/TGZ 原始安装包。
 - `installer-core/`：OpenClaw/Codex 非敏感配置、媒体生成工具和微信插件安装。
 - `private-secrets/`：私密文件，不要上传公开仓库或公开网盘。
 

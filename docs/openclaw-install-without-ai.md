@@ -18,14 +18,14 @@ openclaw-installer-run/
 
 - `install-files/` 是非敏感安装包，包含脚本、installer-core、离线 App/PKG/DMG。
 - `private-secrets/` 只放私密配置，不应该上传公开网盘。
-- `upload-packages/openclaw-macos15-arm64.tar.zst` 和 `upload-packages/openclaw-macos26-arm64.tar.zst` 用于局域网 HTTP 分发。
+- `upload-packages/openclaw-layer-index.json` 与 common、architecture、CLT layers 用于局域网 HTTP 分发。
 - 修改安装脚本后，如果要走 HTTP 分发，必须先重建 `upload-packages/` 包。
 
 重建 HTTP 分发包：
 
 ```bash
 cd /Users/cm/Documents/Me/Project/openclaw-installer
-OVERWRITE_DIST=1 bash build-dist.sh all
+OVERWRITE_LAYERED_DIST=1 bash scripts/build-layered-dist.sh
 ```
 
 ## 二、非 Ansible：单台机器手动安装
@@ -54,19 +54,20 @@ mkdir -p ~/openclaw-installer-run
 
 ```bash
 cd /Users/cm/Documents/Me/Project/openclaw-installer
-PORT=8765 bash upload-packages-package-http.sh
+PORT=8765 bash scripts/serve-package-http.sh
 ```
 
 目标机器下载：
 
 ```bash
-PACKAGE_URL=http://<installer-host-ip>:8765/openclaw-macos15-arm64.tar.zst \
-CHECKSUM_URL=http://<installer-host-ip>:8765/openclaw-macos15-arm64.sha256 \
+LAYER_INDEX_URL=http://<installer-host-ip>:8765/openclaw-layer-index.json \
+LAYER_INDEX_CHECKSUM_URL=http://<installer-host-ip>:8765/openclaw-layer-index.sha256 \
+PACKAGE_PROFILE=macos15-arm64 \
 REMOTE_RUN_DIR=$HOME/openclaw-installer-run \
 bash fetch-package-over-http.sh
 ```
 
-macOS 26.2+ 使用 `openclaw-macos26-arm64.tar.zst`。
+macOS 26.2+ 设置 `PACKAGE_PROFILE=macos26-arm64`。
 
 ### 3. 一条命令安装
 
@@ -86,7 +87,7 @@ bash install-openclaw.sh
 需要让 Codex/OpenClaw 都走本机 CLIProxyAPI：
 
 ```bash
-bash install-openclaw.sh --with-cliproxy-config
+INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 ```
 
 强制重跑已完成阶段：

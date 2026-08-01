@@ -40,9 +40,18 @@ install_cliproxy_runtime() {
     return
   fi
 
+  local bundled_binary="$cliproxy_bundle_dir/CLIProxyAPI"
+  local machine_arch binary_archs
+  machine_arch="$(uname -m)"
+  binary_archs="$(lipo -archs "$bundled_binary" 2>/dev/null || true)"
+  if [ -n "$binary_archs" ] && ! printf '%s\n' "$binary_archs" | tr ' ' '\n' | grep -qx "$machine_arch"; then
+    echo "CLIProxyAPI architecture mismatch: machine=$machine_arch binary=$binary_archs ($bundled_binary)" >&2
+    return 1
+  fi
+
   log "Installing CLIProxyAPI from $cliproxy_bundle_dir"
   mkdir -p "$CLIPROXY_INSTALL_DIR" "$CLIPROXY_HOME" "$HOME/Library/Logs"
-  cp "$cliproxy_bundle_dir/CLIProxyAPI" "$CLIPROXY_BINARY"
+  cp "$bundled_binary" "$CLIPROXY_BINARY"
   chmod 755 "$CLIPROXY_BINARY"
   if [ -d "$cliproxy_bundle_dir/static" ]; then
     rm -rf "$CLIPROXY_HOME/static"
@@ -108,6 +117,19 @@ repair_clash_party_user_data_permissions() {
   rm -f "$app_dir/test/cache.db" "$app_dir/work/cache.db" 2>/dev/null || true
 }
 
+remove_persistent_clash_party_sidecar_fallback() {
+  local label="local.openclaw-installer.mihomo-core"
+  local plist="$HOME/Library/LaunchAgents/${label}.plist"
+
+  launchctl bootout "gui/$(id -u)/${label}" >/dev/null 2>&1 || true
+  launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+
+  if [ -f "$plist" ]; then
+    rm -f "$plist"
+    log "Removed legacy Clash Party mihomo fallback LaunchAgent"
+  fi
+}
+
 restore_clash_party_runtime_config() {
   local secrets_dir="$1"
   local src="$secrets_dir/clash-party/mihomo-party-config.tgz"
@@ -139,6 +161,7 @@ restore_clash_party_runtime_config() {
     find "$profiles_dst" -maxdepth 1 -type f -name '*.yaml' -print | sed -n '1,20p'
   fi
   repair_clash_party_user_data_permissions
+  remove_persistent_clash_party_sidecar_fallback
 
   if [ -d "/Applications/Clash Party.app" ]; then
     pkill -f "/Applications/Clash Party.app" >/dev/null 2>&1 || true
@@ -165,36 +188,7 @@ restore_clash_party_runtime_config() {
     log "Starting Clash Party mihomo sidecar fallback"
     pkill -f "mihomo-party/work" >/dev/null 2>&1 || true
     nohup "$sidecar" -d "$work_dir" >"/tmp/mihomo-party-sidecar.out.log" 2>"/tmp/mihomo-party-sidecar.err.log" </dev/null &
-
-    local plist="$HOME/Library/LaunchAgents/local.openclaw-installer.mihomo-core.plist"
-    mkdir -p "$HOME/Library/LaunchAgents"
-    cat > "$plist" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>local.openclaw-installer.mihomo-core</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>${sidecar}</string>
-    <string>-d</string>
-    <string>${work_dir}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>/tmp/mihomo-party-sidecar.out.log</string>
-  <key>StandardErrorPath</key>
-  <string>/tmp/mihomo-party-sidecar.err.log</string>
-</dict>
-</plist>
-EOF
-    plutil -lint "$plist" >/dev/null
-    launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
+    log "Clash Party mihomo sidecar fallback is temporary; Clash Party owns login recovery"
 
     for wait_i in 1 2 3 4; do
       if command -v curl >/dev/null 2>&1 && curl --socks5-hostname 127.0.0.1:7890 --connect-timeout 2 --max-time 4 -sSI https://chatgpt.com >/dev/null 2>&1; then
@@ -232,6 +226,138 @@ sanitize_cliproxy_config() {
   chmod 600 "$CLIPROXY_CONFIG"
 }
 
+ensure_cliproxy_auth_dir() {
+  if [ ! -f "$CLIPROXY_CONFIG" ]; then
+    return
+  fi
+
+  local expected current
+  expected="auth-dir: \"$CLIPROXY_HOME\""
+  current="$(awk -F': *' '/^auth-dir:/ { gsub(/^["'\'']|["'\'']$/, "", $2); print $2; exit }' "$CLIPROXY_CONFIG")"
+  if [ "$current" = "$CLIPROXY_HOME" ]; then
+    return
+  fi
+
+  if is_dry_run; then
+    dry_log "Would set CLIProxyAPI auth-dir to $CLIPROXY_HOME"
+    return
+  fi
+
+  log "Setting CLIProxyAPI auth-dir to $CLIPROXY_HOME"
+  cp "$CLIPROXY_CONFIG" "$CLIPROXY_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
+  awk -v expected="$expected" '
+    BEGIN { found=0 }
+    /^auth-dir:/ {
+      if (!found) print expected
+      found=1
+      next
+    }
+    { print }
+    END {
+      if (!found) print expected
+    }
+  ' "$CLIPROXY_CONFIG" > "$CLIPROXY_CONFIG.tmp"
+  mv "$CLIPROXY_CONFIG.tmp" "$CLIPROXY_CONFIG"
+  chmod 600 "$CLIPROXY_CONFIG"
+}
+
+ensure_cliproxy_loopback_host() {
+  if [ ! -f "$CLIPROXY_CONFIG" ]; then
+    return
+  fi
+
+  local current expected='host: "127.0.0.1"'
+  current="$(awk -F': *' '/^host:/ { gsub(/^["'\'']|["'\'']$/, "", $2); print $2; exit }' "$CLIPROXY_CONFIG")"
+  if [ "$current" = "127.0.0.1" ]; then
+    return
+  fi
+
+  if is_dry_run; then
+    dry_log "Would bind CLIProxyAPI to 127.0.0.1"
+    return
+  fi
+
+  log "Binding CLIProxyAPI to 127.0.0.1"
+  cp "$CLIPROXY_CONFIG" "$CLIPROXY_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
+  awk -v expected="$expected" '
+    BEGIN { found=0 }
+    /^host:/ {
+      if (!found) print expected
+      found=1
+      next
+    }
+    { print }
+    END {
+      if (!found) print expected
+    }
+  ' "$CLIPROXY_CONFIG" > "$CLIPROXY_CONFIG.tmp"
+  mv "$CLIPROXY_CONFIG.tmp" "$CLIPROXY_CONFIG"
+  chmod 600 "$CLIPROXY_CONFIG"
+}
+
+ensure_cliproxy_api_key() {
+  if [ ! -f "$CLIPROXY_CONFIG" ]; then
+    return
+  fi
+
+  if awk '
+    /^api-keys:/ { in_keys=1; next }
+    in_keys && /^[^[:space:]-]/ { exit(found ? 0 : 1) }
+    in_keys && /^[[:space:]]*-[[:space:]]*[^[:space:]]/ { found=1; exit 0 }
+    END { exit(found ? 0 : 1) }
+  ' "$CLIPROXY_CONFIG"; then
+    return
+  fi
+
+  if is_dry_run; then
+    dry_log "Would add a local API key to $CLIPROXY_CONFIG"
+    return
+  fi
+
+  log "Adding local CLIProxyAPI API key"
+  cp "$CLIPROXY_CONFIG" "$CLIPROXY_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
+  awk -v key="$CLIPROXY_API_KEY" '
+    BEGIN { found=0 }
+    /^api-keys:/ {
+      print
+      print "  - " key
+      found=1
+      next
+    }
+    { print }
+    END {
+      if (!found) {
+        print "api-keys:"
+        print "  - " key
+      }
+    }
+  ' "$CLIPROXY_CONFIG" > "$CLIPROXY_CONFIG.tmp"
+  mv "$CLIPROXY_CONFIG.tmp" "$CLIPROXY_CONFIG"
+  chmod 600 "$CLIPROXY_CONFIG"
+}
+
+read_cliproxy_api_key() {
+  local key
+  [ -f "$CLIPROXY_CONFIG" ] || return 1
+  key="$(awk '
+    /^api-keys:/ { in_keys=1; next }
+    in_keys && /^[^[:space:]-]/ { exit }
+    in_keys && /^[[:space:]]*-[[:space:]]*[^[:space:]]/ {
+      sub(/^[[:space:]]*-[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }
+  ' "$CLIPROXY_CONFIG")"
+  [ -n "$key" ] || return 1
+  case "$key" in
+    \"*\") key="${key#\"}"; key="${key%\"}" ;;
+    \'*\') key="${key#\'}"; key="${key%\'}" ;;
+  esac
+  [ -n "$key" ] || return 1
+  printf '%s\n' "$key"
+}
+
 adapt_cliproxy_proxy_url() {
   if [ ! -f "$CLIPROXY_CONFIG" ]; then
     return
@@ -257,11 +383,14 @@ adapt_cliproxy_proxy_url() {
       log "Keeping CLIProxyAPI proxy-url: $proxy_url"
       return
     fi
-    log "Removing CLIProxyAPI proxy-url because local socks proxy did not pass connectivity check: $proxy_url"
+    log "WARN: Keeping CLIProxyAPI proxy-url even though local socks connectivity failed: $proxy_url"
   else
-    log "Removing CLIProxyAPI proxy-url because local socks port is not listening: $proxy_url"
+    log "WARN: Keeping CLIProxyAPI proxy-url because Clash may start later: $proxy_url"
   fi
 
+  if [ "${CLIPROXY_REMOVE_UNHEALTHY_LOCAL_PROXY:-0}" != "1" ]; then
+    return
+  fi
   if is_dry_run; then
     dry_log "Would remove proxy-url from $CLIPROXY_CONFIG"
     return
@@ -342,7 +471,7 @@ EOF
 configure_cliproxy_agent_configs() {
   if is_dry_run; then
     dry_log "Would point ~/.codex/config.toml and ~/.openclaw/openclaw.json at $CLIPROXY_BASE_URL using model $CLIPROXY_MODEL"
-    dry_log "Would write ~/.codex/auth.json with OPENAI_API_KEY=$CLIPROXY_API_KEY"
+    dry_log "Would write ~/.codex/auth.json with the active local CLIProxyAPI key"
     return
   fi
 
@@ -351,9 +480,14 @@ configure_cliproxy_agent_configs() {
     exit 1
   fi
 
+  local effective_api_key
+  if ! effective_api_key="$(read_cliproxy_api_key)"; then
+    effective_api_key="$CLIPROXY_API_KEY"
+  fi
+
   log "Configuring Codex and OpenClaw to use CLIProxyAPI"
   CLIPROXY_BASE_URL="$CLIPROXY_BASE_URL" \
-  CLIPROXY_API_KEY="$CLIPROXY_API_KEY" \
+  CLIPROXY_EFFECTIVE_API_KEY="$effective_api_key" \
   CLIPROXY_MODEL="$CLIPROXY_MODEL" \
   CLIPROXY_CODEX_PROVIDER="$CLIPROXY_CODEX_PROVIDER" \
   CLIPROXY_OPENCLAW_PROVIDER="$CLIPROXY_OPENCLAW_PROVIDER" \
@@ -364,7 +498,7 @@ const os = require('os');
 
 const home = os.homedir();
 const baseUrl = process.env.CLIPROXY_BASE_URL;
-const apiKey = process.env.CLIPROXY_API_KEY;
+const apiKey = process.env.CLIPROXY_EFFECTIVE_API_KEY;
 const model = process.env.CLIPROXY_MODEL;
 const codexProvider = process.env.CLIPROXY_CODEX_PROVIDER || 'custom';
 const openclawProvider = process.env.CLIPROXY_OPENCLAW_PROVIDER || 'cliproxy';
@@ -379,6 +513,19 @@ function ensureDir(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
 }
 
+function writeIfChanged(file, content, options = undefined) {
+  ensureDir(file);
+  const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  if (current === content) {
+    if (options && options.mode) fs.chmodSync(file, options.mode);
+    return false;
+  }
+  backup(file);
+  fs.writeFileSync(file, content, options);
+  if (options && options.mode) fs.chmodSync(file, options.mode);
+  return true;
+}
+
 function setTopLevelToml(src, key, value) {
   const line = `${key} = ${JSON.stringify(value)}`;
   const re = new RegExp(`^${key}\\s*=.*$`, 'm');
@@ -389,7 +536,7 @@ function setTopLevelToml(src, key, value) {
 function setTomlTable(src, tableName, body) {
   const tableHeader = `[${tableName}]`;
   const escaped = tableHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`\\n?${escaped}\\n[\\s\\S]*?(?=\\n\\[[^\\]]+\\]\\n|$)`, 'm');
+  const re = new RegExp(`\\n?${escaped}\\n[\\s\\S]*?(?=\\n\\[[^\\]]+\\]\\n|$)`);
   const block = `\n${tableHeader}\n${body.trim()}\n`;
   if (re.test(src)) return src.replace(re, block);
   return `${src.replace(/\s*$/, '')}${block}`;
@@ -409,11 +556,12 @@ wire_api = "responses"
 requires_openai_auth = true
 base_url = ${JSON.stringify(baseUrl)}
 `);
-backup(codexConfig);
-fs.writeFileSync(codexConfig, toml);
-backup(codexAuth);
-fs.writeFileSync(codexAuth, `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n`, { mode: 0o600 });
-fs.chmodSync(codexAuth, 0o600);
+writeIfChanged(codexConfig, toml);
+writeIfChanged(
+  codexAuth,
+  `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n`,
+  { mode: 0o600 }
+);
 
 const openclawConfig = path.join(home, '.openclaw', 'openclaw.json');
 ensureDir(openclawConfig);
@@ -445,8 +593,7 @@ openclaw.agents.defaults.model.primary = `${openclawProvider}/${model}`;
 openclaw.agents.defaults.models = openclaw.agents.defaults.models || {};
 openclaw.agents.defaults.models[`${openclawProvider}/${model}`] = { alias: 'gpt5.5' };
 openclaw.agents.defaults.thinkingDefault = 'off';
-backup(openclawConfig);
-fs.writeFileSync(openclawConfig, `${JSON.stringify(openclaw, null, 2)}\n`);
+writeIfChanged(openclawConfig, `${JSON.stringify(openclaw, null, 2)}\n`);
 
 console.log(`Codex provider: ${codexProvider} -> ${baseUrl} (${model})`);
 console.log(`OpenClaw provider: ${openclawProvider} -> ${baseUrl} (${model})`);

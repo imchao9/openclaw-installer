@@ -21,9 +21,16 @@ run_base_phase() {
   install_weixin_launcher
   run_optional_step "OpenClaw CLI/Gateway repair" "$OPENCLAW_FIX_STEP_TIMEOUT_SECONDS" run_openclaw_fix
   run_optional_step "OpenClaw/media setup" "$OPENCLAW_SETUP_STEP_TIMEOUT_SECONDS" run_openclaw_setup
-  run_optional_step "OpenClaw Office/data skills" "$OFFICE_SKILLS_STEP_TIMEOUT_SECONDS" install_openclaw_office_skills
+  if [ "$INSTALL_OFFICE_SKILLS_IN_BASE" = "1" ]; then
+    run_optional_step "OpenClaw Office/data skills" "$OFFICE_SKILLS_STEP_TIMEOUT_SECONDS" install_openclaw_office_skills
+  else
+    log "Deferring optional Office/data skills; run INSTALL_PHASE=office-skills after core validation"
+  fi
   run_optional_step "CLIProxyAPI install/autostart" "$CLIPROXY_STEP_TIMEOUT_SECONDS" install_cliproxy_runtime
   configure_cliproxy_launchagent
+  if [ "${SKIP_CLIPROXY:-0}" != "1" ]; then
+    configure_cliproxy_agent_configs
+  fi
   configure_power
   run_optional_step "OpenClaw/Clash Party reboot recovery" "$AUTOSTART_STEP_TIMEOUT_SECONDS" configure_runtime_recovery
   if [ "$INSTALL_EXTRAS_IN_BASE" = "1" ]; then
@@ -46,7 +53,7 @@ Manual checks after the base phase:
 6. Run private config restore after private-secrets is available:
    INSTALL_PHASE=secrets bash install-new-macbook.sh
 7. After Clash profile restore, recheck OpenClaw login/Gateway state.
-8. Optional: point Codex and OpenClaw at CLIProxyAPI:
+8. Confirm or repair the default Codex/OpenClaw CLIProxyAPI routing:
    INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 9. Reboot once and confirm OpenClaw Gateway, CLIProxyAPI, and Clash Party recover after login.
 NEXT_STEPS
@@ -96,13 +103,20 @@ run_cliproxy_phase() {
   if [ -d "$(resolve_private_secrets_dir)/cliproxy" ]; then
     restore_cliproxy_private_files "$(resolve_private_secrets_dir)"
     sanitize_cliproxy_config
+    ensure_cliproxy_auth_dir
+    ensure_cliproxy_loopback_host
+    ensure_cliproxy_api_key
     adapt_cliproxy_proxy_url
   else
     log "No private CLIProxyAPI files found; using existing or minimal config"
     sanitize_cliproxy_config
+    ensure_cliproxy_auth_dir
+    ensure_cliproxy_loopback_host
+    ensure_cliproxy_api_key
     adapt_cliproxy_proxy_url
   fi
   configure_cliproxy_launchagent
+  configure_cliproxy_agent_configs
   log "CLIProxyAPI phase done"
 }
 
@@ -145,6 +159,21 @@ run_office_skills_phase() {
   run_optional_step "OpenClaw Office/data skills" "$OFFICE_SKILLS_STEP_TIMEOUT_SECONDS" install_openclaw_office_skills
   print_install_problem_summary
   log "Office / data-analysis skills phase done"
+}
+
+run_auth_sync_phase() {
+  require_macos
+  local installer="$SETUP_DIR/scripts/install-codex-auth-sync.sh"
+  require_file "$installer"
+  if is_dry_run; then
+    log "Dry run mode: no Codex Auth Sync Agent files or registration changed"
+    return
+  fi
+
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  log "Writing log to $LOG_FILE"
+  bash "$installer"
+  log "Codex Auth Sync Agent phase done"
 }
 
 run_extras_phase() {

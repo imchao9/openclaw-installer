@@ -8,6 +8,8 @@
 #   upload-packages/openclaw-macos15-arm64.sha256
 #   upload-packages/openclaw-macos15-x64.tar.zst
 #   upload-packages/openclaw-macos15-x64.sha256
+#   upload-packages/openclaw-macos14-x64.tar.zst
+#   upload-packages/openclaw-macos14-x64.sha256
 #
 # These packages are intentionally non-secret. Keep private-secrets/ separate.
 set -euo pipefail
@@ -18,22 +20,26 @@ if [ -f "$SCRIPT_DIR/../install-openclaw.sh" ]; then
 else
   ROOT="$SCRIPT_DIR"
 fi
+source "$ROOT/scripts/lib/source-assets.sh"
 SERVE_DIR="${SERVE_DIR:-$ROOT/upload-packages}"
 BUILD_ROOT="${BUILD_ROOT:-$ROOT/.package-build}"
+BUILD_CACHE_ROOT="${BUILD_CACHE_ROOT:-$ROOT/.build-cache}"
 OVERWRITE="${OVERWRITE_DIST:-${OVERWRITE_PACKAGES:-0}}"
 PROFILE="${1:-all}"
 ZSTD_LEVEL="${ZSTD_LEVEL:--6}"
 REFRESH_DOWNLOAD_ASSETS="${REFRESH_DOWNLOAD_ASSETS:-0}"
+SKIP_STANDALONE_ARCHIVE="${SKIP_STANDALONE_ARCHIVE:-0}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/build-dist.sh [all|macos26-arm64|macos15-arm64|macos15-x64]
+  bash scripts/build-dist.sh [all|macos26-arm64|macos15-arm64|macos15-x64|macos14-x64]
 
 Outputs only these supported archives:
   upload-packages/openclaw-macos26-arm64.tar.zst
   upload-packages/openclaw-macos15-arm64.tar.zst
   upload-packages/openclaw-macos15-x64.tar.zst
+  upload-packages/openclaw-macos14-x64.tar.zst
 
 Set OVERWRITE_DIST=1 to replace existing package build directories and archives.
 Set REFRESH_DOWNLOAD_ASSETS=1 to download public assets before building.
@@ -41,7 +47,7 @@ EOF
 }
 
 case "$PROFILE" in
-  all|macos26-arm64|macos15-arm64|macos15-x64)
+  all|macos26-arm64|macos15-arm64|macos15-x64|macos14-x64)
     ;;
   -h|--help)
     usage
@@ -110,6 +116,9 @@ profile_clt_asset() {
     macos15-x64)
       printf '%s\n' "Command_Line_Tools_for_Xcode_16.4.dmg"
       ;;
+    macos14-x64)
+      printf '%s\n' ""
+      ;;
   esac
 }
 
@@ -124,20 +133,33 @@ profile_description() {
     macos15-x64)
       printf '%s\n' "Intel targets on macOS 15.x"
       ;;
+    macos14-x64)
+      printf '%s\n' "Intel targets on macOS 14.x with Command Line Tools already installed"
+      ;;
+  esac
+}
+
+profile_arch() {
+  case "$1" in
+    macos14-x64|macos15-x64) printf '%s\n' x86_64 ;;
+    macos15-arm64|macos26-arm64) printf '%s\n' arm64 ;;
   esac
 }
 
 copy_profile_asset() {
   local profile="$1" asset="$2" dst="$3" src=""
   case "$profile:$asset" in
-    macos15-x64:Codex.dmg)
-      src="${CODEX_DMG_X64:-/Users/cm/Downloads/Codex-latest-x64.dmg}"
+    macos14-x64:Codex.dmg|macos15-x64:Codex.dmg)
+      src="${CODEX_DMG_X64:-$(asset_source_path Codex-intel.dmg)}"
       ;;
-    macos15-x64:clash-party-macos-1.9.6-x64.pkg)
-      src="${CLASH_PARTY_PKG_X64:-/Users/cm/Downloads/clash-party-macos-1.9.6-x64.pkg}"
+    macos14-x64:clash-party-macos-1.9.6-x64.pkg|macos15-x64:clash-party-macos-1.9.6-x64.pkg)
+      src="${CLASH_PARTY_PKG_X64:-$(asset_source_path clash-party-macos-1.9.6-x64.pkg)}"
+      ;;
+    macos14-x64:DingTalk-universal.dmg|macos15-x64:DingTalk-universal.dmg)
+      src="${DINGTALK_DMG_X64:-$(asset_source_path DingTalk_v8.3.40-Installer_56018405_universal.dmg)}"
       ;;
     *)
-      src="$ROOT/openclaw-team/$asset"
+      src="$(asset_source_path "$asset")"
       ;;
   esac
   copy_item "$src" "$dst"
@@ -149,10 +171,7 @@ copy_openclaw_team_assets() {
 
   local asset
   for asset in \
-    "AweSun_v16.5.0.30757_arm64.dmg" \
     "CC-Switch-v3.15.0-macOS.dmg" \
-    "Clash Verge 2.5.1.dmg" \
-    "DingTalk_v8.3.30-Installer_55620621_arm64.dmg" \
     "Homebrew.pkg" \
     "Obsidian-1.12.7.dmg" \
     "OpenClaw Dashboard.app" \
@@ -163,35 +182,58 @@ copy_openclaw_team_assets() {
     "node-v24.16.0.pkg" \
     "setup-openclaw-weixin.sh" \
     "disable-sleep-note.txt"; do
-    copy_item "$ROOT/openclaw-team/$asset" "$dst/$asset"
+    copy_item "$(asset_source_path "$asset")" "$dst/$asset"
   done
 
   copy_profile_asset "$profile" "Codex.dmg" "$dst/Codex.dmg"
-  if [ "$profile" = "macos15-x64" ]; then
+  if [[ "$profile" == macos*-x64 ]]; then
     copy_profile_asset "$profile" "clash-party-macos-1.9.6-x64.pkg" "$dst/clash-party-macos-1.9.6-x64.pkg"
+    copy_profile_asset "$profile" "DingTalk-universal.dmg" "$dst/DingTalk_v8.3.40-Installer_56018405_universal.dmg"
   else
-    copy_item "$ROOT/openclaw-team/clash-party-macos-1.9.5-arm64.pkg" "$dst/clash-party-macos-1.9.5-arm64.pkg"
+    copy_item "$(asset_source_path AweSun_v16.5.0.30757_arm64.dmg)" "$dst/AweSun_v16.5.0.30757_arm64.dmg"
+    copy_item "$(asset_source_path 'Clash Verge 2.5.1.dmg')" "$dst/Clash Verge 2.5.1.dmg"
+    copy_item "$(asset_source_path clash-party-macos-1.9.5-arm64.pkg)" "$dst/clash-party-macos-1.9.5-arm64.pkg"
+    copy_item "$(asset_source_path DingTalk_v8.3.30-Installer_55620621_arm64.dmg)" "$dst/DingTalk_v8.3.30-Installer_55620621_arm64.dmg"
   fi
 
   clt="$(profile_clt_asset "$profile")"
-  copy_item "$ROOT/openclaw-team/$clt" "$dst/$clt"
+  if [ -n "$clt" ]; then
+    copy_item "$(asset_source_path "$clt")" "$dst/$clt"
+  fi
 
-  if [ -f "$ROOT/openclaw-team/openclaw-npm-cache.tgz" ]; then
-    copy_item "$ROOT/openclaw-team/openclaw-npm-cache.tgz" "$dst/openclaw-npm-cache.tgz"
+  if npm_cache="$(asset_source_path openclaw-npm-cache.tgz)"; then
+    copy_item "$npm_cache" "$dst/openclaw-npm-cache.tgz"
   fi
 }
 
 copy_cliproxy_bundle() {
   local profile="$1" dst="$2"
   local source_dir="${CLIPROXY_SOURCE_DIR:-/Users/cm/Documents/Me/Tool/cliproxy/CLIProxyAPI}"
-  local binary="${CLIPROXY_BINARY:-}"
-  if [ -z "$binary" ] && [ "$profile" = "macos15-x64" ]; then
-    binary="${CLIPROXY_X64_BINARY:-}"
-  fi
-  if [ -z "$binary" ]; then
+  local binary="${CLIPROXY_BINARY:-}" expected_arch
+  expected_arch="$(profile_arch "$profile")"
+  if [[ "$profile" == macos*-x64 ]]; then
+    binary="${CLIPROXY_X64_BINARY:-${binary:-$BUILD_CACHE_ROOT/CLIProxyAPI-darwin-amd64}}"
+    if [ ! -x "$binary" ]; then
+      command -v go >/dev/null 2>&1 || {
+        printf '[ERROR] Go is required to build the Intel CLIProxyAPI binary.\n' >&2
+        return 1
+      }
+      mkdir -p "$(dirname "$binary")"
+      printf 'Building CLIProxyAPI for darwin/amd64 from %s\n' "$source_dir"
+      (
+        cd "$source_dir"
+        env GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o "$binary" ./cmd/server
+      )
+    fi
+  elif [ -z "$binary" ]; then
     binary="$source_dir/bin/CLIProxyAPI"
   fi
   if [ -x "$binary" ]; then
+    if command -v lipo >/dev/null 2>&1 && ! lipo -archs "$binary" | tr ' ' '\n' | grep -qx "$expected_arch"; then
+      printf '[ERROR] CLIProxyAPI architecture mismatch: expected %s, got %s (%s)\n' \
+        "$expected_arch" "$(lipo -archs "$binary" 2>/dev/null || printf unknown)" "$binary" >&2
+      return 1
+    fi
     mkdir -p "$dst/cliproxy"
     copy_item "$binary" "$dst/cliproxy/CLIProxyAPI"
     if [ -d "$source_dir/bin/static" ]; then
@@ -212,8 +254,9 @@ EOF
 }
 
 write_manifest() {
-  local profile="$1" dist="$2" clt
+  local profile="$1" dist="$2" clt clt_display
   clt="$(profile_clt_asset "$profile")"
+  clt_display="${clt:-preinstalled; not bundled}"
   cat > "$dist/DIST_MANIFEST.md" <<EOF
 # Dist Manifest
 
@@ -234,7 +277,7 @@ validation.
 
 ## Included assets
 
-- Profile-specific Command Line Tools: \`$clt\`
+- Profile-specific Command Line Tools: \`$clt_display\`
 - Node.js PKG
 - Google Chrome DMG
 - Profile-specific Codex DMG and Codex.app bundled CLI
@@ -266,6 +309,68 @@ after app installation.
 EOF
 }
 
+write_machine_manifest() {
+  local profile="$1" dist="$2" arch clt clash dingtalk
+  arch="$(profile_arch "$profile")"
+  clt="$(profile_clt_asset "$profile")"
+  if [[ "$profile" == macos*-x64 ]]; then
+    clash="openclaw-team/clash-party-macos-1.9.6-x64.pkg"
+    dingtalk="openclaw-team/DingTalk_v8.3.40-Installer_56018405_universal.dmg"
+  else
+    clash="openclaw-team/clash-party-macos-1.9.5-arm64.pkg"
+    dingtalk="openclaw-team/DingTalk_v8.3.30-Installer_55620621_arm64.dmg"
+  fi
+
+  MANIFEST_PROFILE="$profile" \
+  MANIFEST_ARCH="$arch" \
+  MANIFEST_CLT="${clt:+openclaw-team/$clt}" \
+  MANIFEST_CLASH="$clash" \
+  MANIFEST_DINGTALK="$dingtalk" \
+  /usr/bin/python3 - "$dist" <<'PY'
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+root = Path(sys.argv[1])
+required = [
+    "openclaw-team/Codex.dmg",
+    "openclaw-team/OpenClaw-2026.5.26.dmg",
+    "openclaw-team/node-v24.16.0.pkg",
+    "openclaw-team/cliproxy/CLIProxyAPI",
+    os.environ["MANIFEST_CLASH"],
+    os.environ["MANIFEST_DINGTALK"],
+]
+if os.environ.get("MANIFEST_CLT"):
+    required.append(os.environ["MANIFEST_CLT"])
+assets = []
+for relative in required:
+    path = root / relative
+    if not path.is_file():
+        raise SystemExit(f"Required profile asset is missing: {path}")
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    assets.append({"path": relative, "size_bytes": path.stat().st_size, "sha256": digest.hexdigest()})
+
+manifest = {
+    "schema_version": 1,
+    "generated_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+    "profile": os.environ["MANIFEST_PROFILE"],
+    "target_arch": os.environ["MANIFEST_ARCH"],
+    "required_assets": assets,
+    "app_mappings": [
+        {"asset": "openclaw-team/Codex.dmg", "source_bundle": "ChatGPT.app", "target_bundle": "Codex.app"},
+        {"asset": "openclaw-team/OpenClaw-2026.5.26.dmg", "source_bundle": "OpenClaw.app", "target_bundle": "OpenClaw.app"},
+    ],
+}
+(root / "DIST_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+}
+
 build_profile() {
   local profile="$1"
   local package_name="openclaw-$profile"
@@ -274,12 +379,16 @@ build_profile() {
   local archive="$SERVE_DIR/$package_name.tar.zst"
   local checksum="$SERVE_DIR/$package_name.sha256"
 
-  if [ -e "$package_dir" ] || [ -e "$archive" ] || [ -e "$checksum" ]; then
+  if [ -e "$package_dir" ] ||
+    { [ "$SKIP_STANDALONE_ARCHIVE" != "1" ] && { [ -e "$archive" ] || [ -e "$checksum" ]; }; }; then
     if [ "$OVERWRITE" != "1" ]; then
       printf 'Package output exists for %s. Re-run with OVERWRITE_DIST=1 to rebuild.\n' "$profile" >&2
       exit 1
     fi
-    rm -rf "$package_dir" "$archive" "$checksum"
+    rm -rf "$package_dir"
+    if [ "$SKIP_STANDALONE_ARCHIVE" != "1" ]; then
+      rm -f "$archive" "$checksum"
+    fi
   fi
 
   mkdir -p "$dist" "$SERVE_DIR"
@@ -321,6 +430,7 @@ build_profile() {
   copy_openclaw_team_assets "$profile" "$dist/openclaw-team"
   copy_cliproxy_bundle "$profile" "$dist/openclaw-team"
   write_manifest "$profile" "$dist"
+  write_machine_manifest "$profile" "$dist"
 
   chmod +x \
     "$package_dir/install-openclaw.sh" \
@@ -332,17 +442,21 @@ build_profile() {
     "$dist/setup-mac-autostart.sh" \
     "$dist/make-package.sh"
 
-  (
-    cd "$BUILD_ROOT"
-    tar -cf - "$package_name" | zstd -T0 "$ZSTD_LEVEL" -q -o "$archive"
-  )
-  (
-    cd "$SERVE_DIR"
-    shasum -a 256 "$(basename "$archive")" > "$(basename "$checksum")"
-  )
+  if [ "$SKIP_STANDALONE_ARCHIVE" = "1" ]; then
+    printf 'Built staging only: %s\n' "$package_dir"
+  else
+    (
+      cd "$BUILD_ROOT"
+      tar -cf - "$package_name" | zstd -T0 "$ZSTD_LEVEL" -q -o "$archive"
+    )
+    (
+      cd "$SERVE_DIR"
+      shasum -a 256 "$(basename "$archive")" > "$(basename "$checksum")"
+    )
 
-  printf 'Built %s\n' "$archive"
-  printf 'Checksum %s\n' "$checksum"
+    printf 'Built %s\n' "$archive"
+    printf 'Checksum %s\n' "$checksum"
+  fi
 }
 
 mkdir -p "$BUILD_ROOT" "$SERVE_DIR"
@@ -355,6 +469,7 @@ if [ "$PROFILE" = "all" ]; then
   build_profile macos26-arm64
   build_profile macos15-arm64
   build_profile macos15-x64
+  build_profile macos14-x64
 else
   build_profile "$PROFILE"
 fi

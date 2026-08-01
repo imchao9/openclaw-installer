@@ -16,6 +16,8 @@
 #   SKIP_OPENCLAW_FIX=1     skip OpenClaw CLI/Gateway repair
 #   SKIP_OPENCLAW_SETUP=1   skip installer-core/install.sh
 #   SKIP_OFFICE_SKILLS=1    skip data-analysis / Office skills
+#   INSTALL_OFFICE_SKILLS_IN_BASE=1
+#                           include optional Office skills in base (default: defer)
 #   SKIP_CLIPROXY=1         skip CLIProxyAPI install/autostart
 #   SKIP_POWER=1            skip pmset sleep setting
 #   SKIP_AUTOSTART=1        skip OpenClaw/Clash Party reboot recovery setup
@@ -33,6 +35,7 @@
 #                           install/repair Codex CLI and zsh PATH only
 #   INSTALL_PHASE=office-skills
 #                           install data-analysis / Office skills only
+#   INSTALL_PHASE=auth-sync install/refresh Codex Auth Sync Agent
 #   INSTALL_PHASE=validate  send hello through OpenClaw and Codex as an acceptance check
 #   INSTALL_PHASE=all       run base, then secrets when private-secrets exists
 #   PRIVATE_SECRETS_DIR=... path to private-secrets for INSTALL_PHASE=secrets
@@ -80,6 +83,8 @@ AUTOSTART_STEP_TIMEOUT_SECONDS="${AUTOSTART_STEP_TIMEOUT_SECONDS:-30}"
 PRIVATE_HELPER_STEP_TIMEOUT_SECONDS="${PRIVATE_HELPER_STEP_TIMEOUT_SECONDS:-90}"
 SEEDREAM_STEP_TIMEOUT_SECONDS="${SEEDREAM_STEP_TIMEOUT_SECONDS:-90}"
 INSTALL_EXTRAS_IN_BASE="${INSTALL_EXTRAS_IN_BASE:-0}"
+INSTALL_OFFICE_SKILLS_IN_BASE="${INSTALL_OFFICE_SKILLS_IN_BASE:-0}"
+INSTALL_PHASE_TIMING_FILE="${INSTALL_PHASE_TIMING_FILE:-$ROOT/reports/install-phase-timing.jsonl}"
 INSTALL_PROBLEMS=()
 
 INSTALLER_LIB_DIR="$SETUP_DIR/lib"
@@ -88,47 +93,66 @@ for lib in installer-common.sh installer-apps.sh installer-cliproxy.sh installer
   . "$INSTALLER_LIB_DIR/$lib"
 done
 
+run_timed_phase() {
+  local phase="$1" started finished status
+  shift
+  started="$(date '+%s')"
+  set +e
+  "$@"
+  status="$?"
+  set -e
+  finished="$(date '+%s')"
+  record_phase_timing "$phase" "$started" "$finished" "$status"
+  return "$status"
+}
+
 main() {
   case "$INSTALL_PHASE" in
     base)
-      run_base_phase
+      run_timed_phase base run_base_phase
       ;;
     extras|extra-apps|extra_apps)
-      run_extras_phase
+      run_timed_phase extras run_extras_phase
       ;;
     secrets|key|keys)
-      run_secrets_phase
+      run_timed_phase secrets run_secrets_phase
       ;;
     cliproxy)
-      run_cliproxy_phase
+      run_timed_phase cliproxy run_cliproxy_phase
       ;;
     cliproxy-config|cliproxy_config)
-      run_cliproxy_config_phase
+      run_timed_phase cliproxy-config run_cliproxy_config_phase
       ;;
     deepseek|deepseek-model|secondary-model)
-      run_deepseek_phase
+      run_timed_phase deepseek run_deepseek_phase
       ;;
     codex-cli|codex_cli|codex)
-      run_codex_cli_phase
+      run_timed_phase codex-cli run_codex_cli_phase
       ;;
     office-skills|office_skills|skills)
-      run_office_skills_phase
+      run_timed_phase office-skills run_office_skills_phase
+      ;;
+    auth-sync|auth_sync|codex-auth-sync)
+      run_timed_phase auth-sync run_auth_sync_phase
       ;;
     validate|validation|check)
-      run_validate_phase
+      run_timed_phase validate run_validate_phase
       ;;
     all)
-      run_base_phase
+      run_timed_phase base run_base_phase
       if [ -d "$(resolve_private_secrets_dir)" ]; then
-        run_secrets_phase
+        run_timed_phase secrets run_secrets_phase
       else
         log "Skipping secrets phase because private-secrets was not found"
       fi
-      run_validate_phase
+      run_timed_phase cliproxy run_cliproxy_phase
+      run_timed_phase cliproxy-config run_cliproxy_config_phase
+      run_timed_phase extras run_extras_phase
+      run_timed_phase validate run_validate_phase
       ;;
     *)
       echo "Unknown INSTALL_PHASE: $INSTALL_PHASE"
-      echo "Use INSTALL_PHASE=base, INSTALL_PHASE=extras, INSTALL_PHASE=secrets, INSTALL_PHASE=cliproxy, INSTALL_PHASE=cliproxy-config, INSTALL_PHASE=deepseek, INSTALL_PHASE=codex-cli, INSTALL_PHASE=office-skills, INSTALL_PHASE=validate, or INSTALL_PHASE=all."
+      echo "Use INSTALL_PHASE=base, INSTALL_PHASE=extras, INSTALL_PHASE=secrets, INSTALL_PHASE=cliproxy, INSTALL_PHASE=cliproxy-config, INSTALL_PHASE=deepseek, INSTALL_PHASE=codex-cli, INSTALL_PHASE=office-skills, INSTALL_PHASE=auth-sync, INSTALL_PHASE=validate, or INSTALL_PHASE=all."
       exit 1
       ;;
   esac

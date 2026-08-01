@@ -3,9 +3,9 @@
   hosts: openclaw_macs
   gather_facts: false
   vars:
-    remote_validate_dir: /tmp/openclaw-agent-validate
     remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
     local_report_dir: "scripts/ansible/reports"
+    validation_report_name: "validation-report.json"
     validate_codex: "1"
     validate_openclaw: "1"
     repair_openclaw_config: "0"
@@ -19,29 +19,15 @@
     expected_text: ""
 
   tasks:
-    - name: Create remote validation directory
-      ansible.builtin.file:
-        path: "{{ remote_validate_dir }}"
-        state: directory
-        mode: "0700"
+    - name: Create remote report directory without Python
+      ansible.builtin.raw: |
+        /bin/mkdir -p "{{ remote_run_dir }}/reports"
+        /bin/chmod 700 "{{ remote_run_dir }}/reports"
+      changed_when: false
 
-    - name: Create remote report directory
-      ansible.builtin.file:
-        path: "{{ remote_run_dir }}/reports"
-        state: directory
-        mode: "0700"
-
-    - name: Upload validation script
-      ansible.builtin.copy:
-        src: ../../../installer-core/scripts/validate-agent-configs.sh
-        dest: "{{ remote_validate_dir }}/validate-agent-configs.sh"
-        mode: "0755"
-
-    - name: Run Codex/OpenClaw validation
-      ansible.builtin.shell: |
-        set -o pipefail
-        bash "{{ remote_validate_dir }}/validate-agent-configs.sh"
-      args:
+    - name: Run Codex/OpenClaw validation without Ansible Python
+      ansible.builtin.script:
+        cmd: ../../../installer-core/scripts/validate-agent-configs.sh
         executable: /bin/bash
       environment:
         VALIDATE_CODEX: "{{ validate_codex }}"
@@ -55,7 +41,7 @@
         CODEX_HELLO_PROMPT: "{{ codex_hello_prompt }}"
         OPENCLAW_HELLO_PROMPT: "{{ openclaw_hello_prompt }}"
         EXPECTED_TEXT: "{{ expected_text }}"
-        VALIDATION_REPORT_PATH: "{{ remote_run_dir }}/reports/validation-report.json"
+        VALIDATION_REPORT_PATH: "{{ remote_run_dir }}/reports/{{ validation_report_name }}"
       register: validation_result
       changed_when: false
       failed_when: false
@@ -64,9 +50,24 @@
       ansible.builtin.debug:
         var: validation_result.stdout_lines
 
-    - name: Fetch validation report
-      ansible.builtin.fetch:
-        src: "{{ remote_run_dir }}/reports/validation-report.json"
-        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/validation-report.json"
-        flat: true
+    - name: Read validation report without remote Python
+      ansible.builtin.raw: |
+        /bin/cat "{{ remote_run_dir }}/reports/{{ validation_report_name }}"
+      register: validation_report_content
+      changed_when: false
       when: validation_result is defined
+
+    - name: Ensure local validation report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}/{{ inventory_hostname }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
+    - name: Save validation report locally
+      ansible.builtin.copy:
+        content: "{{ validation_report_content.stdout }}"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ validation_report_name }}"
+        mode: "0600"
+      delegate_to: localhost
+      when: validation_report_content is defined

@@ -2,11 +2,14 @@
 # Validate that Codex and OpenClaw can produce a real model reply.
 set -u
 
+PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export PATH
+
 CODEX_TIMEOUT_SECONDS="${CODEX_TIMEOUT_SECONDS:-60}"
-CODEX_ENDPOINT_TIMEOUT_SECONDS="${CODEX_ENDPOINT_TIMEOUT_SECONDS:-8}"
+CODEX_ENDPOINT_TIMEOUT_SECONDS="${CODEX_ENDPOINT_TIMEOUT_SECONDS:-90}"
 CODEX_VALIDATION_MODE="${CODEX_VALIDATION_MODE:-endpoint}"
 CODEX_ENDPOINT_MODEL="${CODEX_ENDPOINT_MODEL:-}"
-OPENCLAW_TIMEOUT_SECONDS="${OPENCLAW_TIMEOUT_SECONDS:-20}"
+OPENCLAW_TIMEOUT_SECONDS="${OPENCLAW_TIMEOUT_SECONDS:-90}"
 CODEX_HELLO_PROMPT="${CODEX_HELLO_PROMPT:-你好你是谁}"
 OPENCLAW_HELLO_PROMPT="${OPENCLAW_HELLO_PROMPT:-你好你是谁}"
 OPENCLAW_TEST_MODEL="${OPENCLAW_TEST_MODEL:-}"
@@ -15,6 +18,7 @@ VALIDATE_CODEX="${VALIDATE_CODEX:-1}"
 VALIDATE_OPENCLAW="${VALIDATE_OPENCLAW:-1}"
 REPAIR_OPENCLAW_CONFIG="${REPAIR_OPENCLAW_CONFIG:-1}"
 CHECK_OPENCLAW_CONFIG_SHAPE="${CHECK_OPENCLAW_CONFIG_SHAPE:-1}"
+OPENCLAW_VALIDATION_ROUTE="${OPENCLAW_VALIDATION_ROUTE:-auto}"
 VALIDATION_REPORT_PATH="${VALIDATION_REPORT_PATH:-}"
 if [ -z "$VALIDATION_REPORT_PATH" ] && [ -n "${OPENCLAW_RUN_DIR:-}" ]; then
   VALIDATION_REPORT_PATH="$OPENCLAW_RUN_DIR/reports/validation-report.json"
@@ -29,6 +33,8 @@ CODEX_STATUS="skipped"
 CODEX_EXIT_CODE="null"
 CODEX_ERROR=""
 CODEX_USED_PROXY=false
+VALIDATION_STARTED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+VALIDATION_STARTED_EPOCH="$(date '+%s')"
 
 log() {
   printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"
@@ -44,20 +50,49 @@ file_tail() {
   tail -n 60 "$file"
 }
 
+validation_reason_code() {
+  local status="$1" error="$2"
+  if [ "$status" = "pass" ]; then
+    printf ok
+  elif [ "$status" = "skipped" ]; then
+    printf skipped
+  elif printf '%s' "$error" | grep -Eqi 'auth_unavailable|invalid_refresh_token|token_expired|no auth available|invalid refresh token'; then
+    printf auth_unavailable
+  elif printf '%s' "$error" | grep -Eqi 'command not found|CLI not found'; then
+    printf not_installed
+  elif printf '%s' "$error" | grep -Eqi 'timed out|timeout|alarm'; then
+    printf timeout
+  elif printf '%s' "$error" | grep -Eqi 'reconnecting|stream disconnected|stream closed before'; then
+    printf stream_reconnect
+  else
+    printf validation_failed
+  fi
+}
+
 write_validation_report() {
   local path="$VALIDATION_REPORT_PATH"
+  local finished_at finished_epoch duration_seconds codex_reason openclaw_reason
   [ -n "$path" ] || return 0
+  finished_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  finished_epoch="$(date '+%s')"
+  duration_seconds=$((finished_epoch - VALIDATION_STARTED_EPOCH))
+  codex_reason="$(validation_reason_code "$CODEX_STATUS" "$CODEX_ERROR")"
+  openclaw_reason="$(validation_reason_code "$OPENCLAW_STATUS" "$OPENCLAW_ERROR")"
   mkdir -p "$(dirname "$path")"
   cat > "$path" <<EOF
 {
-  "schema_version": 1,
-  "generated_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
+  "schema_version": 2,
+  "generated_at": "$finished_at",
+  "started_at": "$VALIDATION_STARTED_AT",
+  "finished_at": "$finished_at",
+  "duration_seconds": $duration_seconds,
   "host": "$(json_escape "$(hostname 2>/dev/null || printf unknown)")",
   "user": "$(json_escape "$(whoami 2>/dev/null || printf unknown)")",
   "expected_text": "$(json_escape "$EXPECTED_TEXT")",
   "codex": {
     "requested": $([ "$VALIDATE_CODEX" = "1" ] && printf true || printf false),
     "status": "$(json_escape "$CODEX_STATUS")",
+    "reason_code": "$(json_escape "$codex_reason")",
     "exit_code": $CODEX_EXIT_CODE,
     "timeout_seconds": ${CODEX_TIMEOUT_SECONDS:-0},
     "mode": "$(json_escape "$CODEX_VALIDATION_MODE")",
@@ -67,6 +102,7 @@ write_validation_report() {
   "openclaw": {
     "requested": $([ "$VALIDATE_OPENCLAW" = "1" ] && printf true || printf false),
     "status": "$(json_escape "$OPENCLAW_STATUS")",
+    "reason_code": "$(json_escape "$openclaw_reason")",
     "exit_code": $OPENCLAW_EXIT_CODE,
     "timeout_seconds": ${OPENCLAW_TIMEOUT_SECONDS:-0},
     "test_model": "$(json_escape "$OPENCLAW_TEST_MODEL")",
@@ -99,7 +135,28 @@ run_with_timeout() {
   elif command -v timeout >/dev/null 2>&1; then
     timeout "$seconds" "$@"
   else
-    perl -e 'alarm shift; exec @ARGV' "$seconds" "$@"
+    # alarm + exec does not work: exec replaces perl and clears its alarm.
+    # Keep a parent process that owns a separate process group so that a
+    # stalled CLI and any descendants are actually terminated on macOS.
+    perl -e '
+      my $seconds = shift @ARGV;
+      my $pid = fork();
+      die "fork failed: $!\n" unless defined $pid;
+      if ($pid == 0) {
+        setpgrp(0, 0) or die "setpgrp failed: $!\n";
+        exec @ARGV or die "exec failed: $!\n";
+      }
+      local $SIG{ALRM} = sub {
+        kill "TERM", -$pid;
+        select undef, undef, undef, 1;
+        kill "KILL", -$pid;
+        waitpid($pid, 0);
+        exit 124;
+      };
+      alarm $seconds;
+      waitpid($pid, 0);
+      exit($? == -1 ? 1 : $? >> 8);
+    ' "$seconds" "$@"
   fi
 }
 
@@ -162,15 +219,26 @@ if (!fs.existsSync(configPath)) {
   process.exit(1);
 }
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-const raw = JSON.stringify(config);
-const forbidden = raw.match(/matrixrouter|anthropic|claude-opus-4-8/i);
-if (forbidden) {
-  console.error(`Forbidden OpenClaw provider/model found: ${forbidden[0]}`);
-  process.exit(1);
-}
 const providers = Object.keys(config.models?.providers || {});
 const primary = config.agents?.defaults?.model?.primary;
 const fallbacks = config.agents?.defaults?.model?.fallbacks || [];
+const requestedRoute = process.env.OPENCLAW_VALIDATION_ROUTE || 'auto';
+const route = requestedRoute === 'auto'
+  ? (String(primary || '').startsWith('matrixrouter/') ? 'matrixrouter' : 'cliproxy')
+  : requestedRoute;
+if (route === 'matrixrouter') {
+  const provider = config.models?.providers?.matrixrouter;
+  if (!provider || provider.api !== 'anthropic-messages' || !String(primary || '').startsWith('matrixrouter/')) {
+    console.error(`Expected MatrixRouter Anthropic configuration, got primary=${primary || '<none>'}`);
+    process.exit(1);
+  }
+  console.log(`OpenClaw config OK: route=matrixrouter; primary=${primary}`);
+  process.exit(0);
+}
+if (route !== 'cliproxy') {
+  console.error(`Unsupported OPENCLAW_VALIDATION_ROUTE=${route}`);
+  process.exit(1);
+}
 if (!providers.includes('cliproxy') || !providers.includes('deepseek')) {
   console.error(`Expected providers cliproxy and deepseek, got: ${providers.join(', ') || '<none>'}`);
   process.exit(1);
@@ -192,6 +260,18 @@ openclaw_installed() {
 }
 
 repair_openclaw_config_if_possible() {
+  if [ "$OPENCLAW_VALIDATION_ROUTE" = "matrixrouter" ]; then
+    log "MatrixRouter route detected; refusing to replace it with CLIProxy during validation"
+    return 1
+  fi
+  if command -v node >/dev/null 2>&1 && node -e '
+    const fs=require("fs"), p=require("path").join(process.env.HOME,".openclaw","openclaw.json");
+    if (fs.existsSync(p) && String(JSON.parse(fs.readFileSync(p,"utf8"))?.agents?.defaults?.model?.primary || "").startsWith("matrixrouter/")) process.exit(0);
+    process.exit(1);
+  ' 2>/dev/null; then
+    log "MatrixRouter route detected from current config; refusing CLIProxy repair"
+    return 1
+  fi
   if [ "$REPAIR_OPENCLAW_CONFIG" != "1" ]; then
     log "OpenClaw config repair disabled (REPAIR_OPENCLAW_CONFIG=$REPAIR_OPENCLAW_CONFIG)"
     return 1
@@ -532,7 +612,7 @@ req = urllib.request.Request(
     },
     method="POST",
 )
-timeout = int(os.environ.get("CODEX_ENDPOINT_TIMEOUT_SECONDS") or "8")
+timeout = int(os.environ.get("CODEX_ENDPOINT_TIMEOUT_SECONDS") or "90")
 try:
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = resp.read(4096).decode("utf-8", "replace")

@@ -314,6 +314,9 @@ install_private_secrets() {
 
   restore_cliproxy_private_files "$secrets_dir"
   sanitize_cliproxy_config
+  ensure_cliproxy_auth_dir
+  ensure_cliproxy_loopback_host
+  ensure_cliproxy_api_key
   restore_clash_party_runtime_config "$secrets_dir"
   adapt_cliproxy_proxy_url
   configure_cliproxy_launchagent
@@ -338,9 +341,11 @@ install_private_secrets() {
       bash "$SETUP_DIR/scripts/setup-seedream.sh"
   fi
 
-  if [ "${CONFIGURE_CLIPROXY_AGENTS:-0}" = "1" ]; then
-    configure_cliproxy_agent_configs
-  fi
+  # Private restore may overwrite Codex/OpenClaw routing. Re-apply the local
+  # CLIProxy contract every time so config.toml and auth.json stay paired with
+  # the API key actually accepted by CLIProxyAPI.
+  configure_cliproxy_agent_configs
+  restart_openclaw_gateway_if_available
 }
 
 configure_power() {

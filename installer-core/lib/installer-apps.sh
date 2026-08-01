@@ -25,7 +25,8 @@ install_app_from_dmg() {
     exit 1
   fi
 
-  local target="/Applications/$(basename "$app")"
+  local target_name="${expected:-$(basename "$app")}"
+  local target="/Applications/$target_name"
   if [ -d "$target" ]; then
     log "Replacing existing $(basename "$target")"
     sudo rm -rf "$target"
@@ -127,6 +128,7 @@ install_extra_apps() {
   fi
 
   local app_jobs=()
+  local dingtalk_dmg=""
   if [ -f "$BUNDLE_DIR/googlechrome.dmg" ]; then
     app_jobs+=("Google Chrome" "$BUNDLE_DIR/googlechrome.dmg" "Google Chrome.app")
   else
@@ -160,10 +162,10 @@ install_extra_apps() {
 
   if [ "${SKIP_DINGTALK:-0}" = "1" ]; then
     log "Skipping DingTalk (SKIP_DINGTALK=1)"
-  elif [ -f "$BUNDLE_DIR/DingTalk_v8.3.30-Installer_55620621_arm64.dmg" ]; then
-    install_pkg_from_dmg "DingTalk" "$BUNDLE_DIR/DingTalk_v8.3.30-Installer_55620621_arm64.dmg"
+  elif dingtalk_dmg="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -iname 'DingTalk*.dmg' -print | sort | tail -n 1)" && [ -n "$dingtalk_dmg" ]; then
+    install_pkg_from_dmg "DingTalk" "$dingtalk_dmg"
   else
-    log "Skipping DingTalk because DingTalk_v8.3.30-Installer_55620621_arm64.dmg is not in this bundle"
+    log "Skipping DingTalk because no DingTalk DMG is in this bundle"
   fi
 
   log "Skipping Doubao input method; install it manually if needed"
@@ -221,7 +223,8 @@ install_weixin_launcher() {
   sudo ditto "$tmp_app" "$app"
   sudo cp "$runner" "$command"
   sudo chmod -R a+rX "$app"
-  sudo chmod +x "$app/Contents/MacOS/applet" "$command"
+  sudo chmod +x "$app/Contents/MacOS/applet"
+  sudo chmod a+rx "$command"
   sudo xattr -dr com.apple.quarantine "$app" "$command" 2>/dev/null || true
   rm -rf "$tmp_dir"
   log "Installed $app"
@@ -253,7 +256,8 @@ install_dashboard_launcher() {
   sudo ditto "$source_app" "$app"
   sudo cp "$runner" "$command"
   sudo chmod -R a+rX "$app"
-  sudo chmod +x "$app/Contents/MacOS/OpenClaw Dashboard" "$app/Contents/Resources/openclaw-dashboard.command" "$command"
+  sudo chmod +x "$app/Contents/MacOS/OpenClaw Dashboard" "$app/Contents/Resources/openclaw-dashboard.command"
+  sudo chmod a+rx "$command"
   sudo xattr -dr com.apple.quarantine "$app" "$command" 2>/dev/null || true
   log "Installed $app"
   log "Installed $command"

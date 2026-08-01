@@ -3,6 +3,9 @@
 # conservative install plan. This script does not modify the target machine.
 set -u
 
+PATH="/usr/local/bin:/opt/homebrew/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export PATH
+
 RUN_DIR="${OPENCLAW_RUN_DIR:-$HOME/openclaw-installer-run}"
 OUTPUT_PATH=""
 PLAN_PATH=""
@@ -106,7 +109,10 @@ http_ok() {
 
 clash_socks_ok() {
   command_exists curl || return 1
-  curl --socks5-hostname 127.0.0.1:7890 --connect-timeout 2 --max-time 4 -sSI https://chatgpt.com >/dev/null 2>&1
+  curl --socks5-hostname 127.0.0.1:7890 --connect-timeout 5 --max-time 12 \
+    -sS -o /dev/null https://api.openai.com/v1/models >/dev/null 2>&1 \
+    || curl --socks5-hostname 127.0.0.1:7890 --connect-timeout 5 --max-time 12 \
+      -sS -o /dev/null https://chatgpt.com >/dev/null 2>&1
 }
 
 process_matches() {
@@ -141,7 +147,48 @@ openclaw_config_shape_ok() {
 codex_config_shape_ok() {
   local cfg="$HOME/.codex/config.toml"
   [ -f "$cfg" ] || return 1
+  grep -Eq '^model_provider[[:space:]]*=[[:space:]]*"custom"' "$cfg" || return 1
   grep -qF '127.0.0.1:8317' "$cfg" || return 1
+  grep -Eq '^wire_api[[:space:]]*=[[:space:]]*"responses"' "$cfg" || return 1
+}
+
+cliproxy_api_key_value() {
+  local cfg="$HOME/.cli-proxy-api/config.yaml" key
+  [ -f "$cfg" ] || return 1
+  key="$(awk '
+    /^api-keys:/ { in_keys=1; next }
+    in_keys && /^[^[:space:]-]/ { exit }
+    in_keys && /^[[:space:]]*-[[:space:]]*[^[:space:]]/ {
+      sub(/^[[:space:]]*-[[:space:]]*/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }
+  ' "$cfg")"
+  case "$key" in
+    \"*\") key="${key#\"}"; key="${key%\"}" ;;
+    \'*\') key="${key#\'}"; key="${key%\'}" ;;
+  esac
+  [ -n "$key" ] || return 1
+  printf '%s\n' "$key"
+}
+
+codex_auth_cliproxy_ok() {
+  local auth="$HOME/.codex/auth.json" expected actual
+  [ -f "$auth" ] || return 1
+  expected="$(cliproxy_api_key_value)" || return 1
+  actual="$(/usr/bin/python3 - "$auth" <<'PY'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1])).get("OPENAI_API_KEY", "")
+except (OSError, ValueError, AttributeError):
+    value = ""
+print(value)
+PY
+)"
+  [ -n "$actual" ] && [ "$actual" = "$expected" ]
 }
 
 macos_version="$(sw_vers -productVersion 2>/dev/null || printf unknown)"
@@ -189,6 +236,7 @@ chrome_ok=0; app_exists "Google Chrome" && chrome_ok=1
 codex_app_ok=0; app_exists "Codex" && codex_app_ok=1
 openclaw_app_ok=0; app_exists "OpenClaw" && openclaw_app_ok=1
 obsidian_ok=0; app_exists "Obsidian" && obsidian_ok=1
+cc_switch_ok=0; any_app_exists "CC-Switch" "CC Switch" && cc_switch_ok=1
 clash_party_app_ok=0; app_exists "Clash Party" && clash_party_app_ok=1
 dingtalk_ok=0; any_app_exists "DingTalk" "钉钉" && dingtalk_ok=1
 awesun_ok=0; any_app_exists "AweSun" "SunloginClient" "向日葵远程控制" && awesun_ok=1
@@ -233,12 +281,24 @@ fi
 
 codex_auth_ok=0; file_exists "$HOME/.codex/auth.json" && codex_auth_ok=1
 codex_config_ok=0; file_exists "$HOME/.codex/config.toml" && codex_config_ok=1
-codex_cliproxy_config_ok=0; codex_config_shape_ok && codex_cliproxy_config_ok=1
+codex_auth_cliproxy_ok_flag=0; codex_auth_cliproxy_ok && codex_auth_cliproxy_ok_flag=1
+codex_cliproxy_config_ok=0
+if codex_config_shape_ok && [ "$codex_auth_cliproxy_ok_flag" = "1" ]; then
+  codex_cliproxy_config_ok=1
+fi
 openclaw_config_ok=0; file_exists "$HOME/.openclaw/openclaw.json" && openclaw_config_ok=1
 openclaw_cliproxy_config_ok=0; openclaw_config_shape_ok && openclaw_cliproxy_config_ok=1
 media_secrets_ok=0; file_exists "$HOME/.config/openclaw-media/secrets.env" && media_secrets_ok=1
 
-cliproxy_binary_ok=0; file_exists "$HOME/.local/bin/CLIProxyAPI" && cliproxy_binary_ok=1
+cliproxy_binary_archs="$(lipo -archs "$HOME/.local/bin/CLIProxyAPI" 2>/dev/null || true)"
+cliproxy_binary_arch_ok=0
+if [ -n "$cliproxy_binary_archs" ] && printf '%s\n' "$cliproxy_binary_archs" | tr ' ' '\n' | grep -qx "$arch"; then
+  cliproxy_binary_arch_ok=1
+fi
+cliproxy_binary_ok=0
+if file_exists "$HOME/.local/bin/CLIProxyAPI" && [ "$cliproxy_binary_arch_ok" = "1" ]; then
+  cliproxy_binary_ok=1
+fi
 cliproxy_config_ok=0; file_exists "$HOME/.cli-proxy-api/config.yaml" && cliproxy_config_ok=1
 cliproxy_launchagent_ok=0; file_exists "$HOME/Library/LaunchAgents/local.openclaw-installer.cliproxy.plist" && cliproxy_launchagent_ok=1
 cliproxy_listening_ok=0; port_listening 8317 && cliproxy_listening_ok=1
@@ -250,6 +310,12 @@ if process_matches "Clash Party" || process_matches "mihomo-party"; then
   clash_process_ok=1
 fi
 clash_socks_ok_flag=0; clash_socks_ok && clash_socks_ok_flag=1
+
+auth_sync_root="$HOME/Library/Application Support/Codex Auth Sync"
+auth_sync_installed_ok=0
+[ -x "$auth_sync_root/bin/codex-auth-sync" ] && auth_sync_installed_ok=1
+auth_sync_registered_ok=0
+[ -f "$auth_sync_root/device.json" ] && auth_sync_registered_ok=1
 
 PLAN_RUN_BASE=0
 PLAN_INSTALL_NODE=0
@@ -286,9 +352,16 @@ if [ "$codex_app_ok" = "0" ] || [ "$openclaw_app_ok" = "0" ] || [ "$clash_party_
   add_reason "one or more core apps missing"
 fi
 
-if [ "$chrome_ok" = "0" ] || [ "$obsidian_ok" = "0" ] || [ "$awesun_ok" = "0" ] || [ "$doubao_ok" = "0" ]; then
+required_extra_apps_missing=0
+if [ "$chrome_ok" = "0" ] || [ "$obsidian_ok" = "0" ] || [ "$cc_switch_ok" = "0" ]; then
+  required_extra_apps_missing=1
+fi
+if [ "$arch" = "arm64" ] && [ "$awesun_ok" = "0" ]; then
+  required_extra_apps_missing=1
+fi
+if [ "$required_extra_apps_missing" = "1" ]; then
   PLAN_INSTALL_EXTRA_APPS=1
-  add_reason "one or more non-core apps missing"
+  add_reason "one or more required non-core apps missing"
 fi
 
 if [ "$dingtalk_ok" = "0" ]; then
@@ -419,6 +492,7 @@ cat > "$OUTPUT_PATH" <<EOF
     "codex": "$(status app_exists "Codex")",
     "openclaw": "$(status app_exists "OpenClaw")",
     "obsidian": "$(status app_exists "Obsidian")",
+    "cc_switch": $([ "$cc_switch_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "clash_party": "$(status app_exists "Clash Party")",
     "dingtalk": $([ "$dingtalk_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "awesun": $([ "$awesun_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
@@ -432,6 +506,7 @@ cat > "$OUTPUT_PATH" <<EOF
   },
   "configs": {
     "codex_auth": $([ "$codex_auth_ok" = "1" ] && printf true || printf false),
+    "codex_auth_cliproxy": $([ "$codex_auth_cliproxy_ok_flag" = "1" ] && printf true || printf false),
     "codex_config": $([ "$codex_config_ok" = "1" ] && printf true || printf false),
     "codex_cliproxy_config": $([ "$codex_cliproxy_config_ok" = "1" ] && printf true || printf false),
     "openclaw_config": $([ "$openclaw_config_ok" = "1" ] && printf true || printf false),
@@ -440,6 +515,8 @@ cat > "$OUTPUT_PATH" <<EOF
   },
   "cliproxy": {
     "binary": $([ "$cliproxy_binary_ok" = "1" ] && printf true || printf false),
+    "binary_archs": "$(json_escape "$cliproxy_binary_archs")",
+    "binary_arch_matches_machine": $([ "$cliproxy_binary_arch_ok" = "1" ] && printf true || printf false),
     "config": $([ "$cliproxy_config_ok" = "1" ] && printf true || printf false),
     "launchagent": $([ "$cliproxy_launchagent_ok" = "1" ] && printf true || printf false),
     "listening_8317": $([ "$cliproxy_listening_ok" = "1" ] && printf true || printf false),
@@ -450,6 +527,10 @@ cat > "$OUTPUT_PATH" <<EOF
     "profiles_present": $([ "$clash_profiles_ok" = "1" ] && printf true || printf false),
     "process_running": $([ "$clash_process_ok" = "1" ] && printf true || printf false),
     "socks_7890_healthy": $([ "$clash_socks_ok_flag" = "1" ] && printf true || printf false)
+  },
+  "auth_sync": {
+    "installed": $([ "$auth_sync_installed_ok" = "1" ] && printf true || printf false),
+    "registered": $([ "$auth_sync_registered_ok" = "1" ] && printf true || printf false)
   },
   "plan": {
     "run_base": $([ "$PLAN_RUN_BASE" = "1" ] && printf true || printf false),

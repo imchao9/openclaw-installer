@@ -8,26 +8,19 @@
     local_report_dir: "scripts/ansible/reports"
 
   tasks:
-    - name: Create remote report directory
-      ansible.builtin.file:
-        path: "{{ remote_run_dir }}/reports"
-        state: directory
-        mode: "0700"
+    - name: Create remote report directory without Python
+      ansible.builtin.raw: |
+        /bin/mkdir -p "{{ remote_run_dir }}/reports"
+        /bin/chmod 700 "{{ remote_run_dir }}/reports"
+      changed_when: false
 
-    - name: Upload checkpoint scanner
-      ansible.builtin.copy:
-        src: ../../../installer-core/scripts/check-install-checkpoints.sh
-        dest: /tmp/check-install-checkpoints.sh
-        mode: "0755"
-
-    - name: Run checkpoint scanner
-      ansible.builtin.shell: |
-        set -euo pipefail
-        bash /tmp/check-install-checkpoints.sh \
-          --run-dir "{{ remote_run_dir }}" \
-          --output "{{ remote_run_dir }}/reports/{{ scan_label }}-install-report.json" \
-          --plan "{{ remote_run_dir }}/reports/{{ scan_label }}-install-plan.env"
-      args:
+    - name: Run checkpoint scanner without remote Python
+      ansible.builtin.script:
+        cmd: >-
+          ../../../installer-core/scripts/check-install-checkpoints.sh
+          --run-dir {{ remote_run_dir | quote }}
+          --output {{ (remote_run_dir + '/reports/' + scan_label + '-install-report.json') | quote }}
+          --plan {{ (remote_run_dir + '/reports/' + scan_label + '-install-plan.env') | quote }}
         executable: /bin/bash
       register: scan_result
       changed_when: false
@@ -36,14 +29,35 @@
       ansible.builtin.debug:
         var: scan_result.stdout_lines
 
-    - name: Fetch scan report
-      ansible.builtin.fetch:
-        src: "{{ remote_run_dir }}/reports/{{ scan_label }}-install-report.json"
-        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ scan_label }}-install-report.json"
-        flat: true
+    - name: Read scan report without remote Python
+      ansible.builtin.raw: |
+        /bin/cat "{{ remote_run_dir }}/reports/{{ scan_label }}-install-report.json"
+      register: scan_report_content
+      changed_when: false
 
-    - name: Fetch scan plan
-      ansible.builtin.fetch:
-        src: "{{ remote_run_dir }}/reports/{{ scan_label }}-install-plan.env"
+    - name: Read scan plan without remote Python
+      ansible.builtin.raw: |
+        /bin/cat "{{ remote_run_dir }}/reports/{{ scan_label }}-install-plan.env"
+      register: scan_plan_content
+      changed_when: false
+
+    - name: Ensure local scan report directory exists
+      ansible.builtin.file:
+        path: "{{ local_report_dir }}/{{ inventory_hostname }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+
+    - name: Save scan report locally
+      ansible.builtin.copy:
+        content: "{{ scan_report_content.stdout }}"
+        dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ scan_label }}-install-report.json"
+        mode: "0600"
+      delegate_to: localhost
+
+    - name: Save scan plan locally
+      ansible.builtin.copy:
+        content: "{{ scan_plan_content.stdout }}"
         dest: "{{ local_report_dir }}/{{ inventory_hostname }}/{{ scan_label }}-install-plan.env"
-        flat: true
+        mode: "0600"
+      delegate_to: localhost

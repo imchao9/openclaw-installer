@@ -4,10 +4,10 @@
   gather_facts: false
   vars:
     remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
-    local_team_dir: "{{ playbook_dir }}/../../../openclaw-team"
     local_root_dir: "{{ playbook_dir }}/../../.."
+    local_team_dir: "{{ lookup('env', 'OPENCLAW_ASSET_SOURCE_DIR') | default(local_root_dir + '/upload-packages/source-assets/openclaw-team', true) }}"
     clt_apple_silicon_dmg: "{{ local_team_dir }}/Command_Line_Tools_26.5_Apple_silicon.dmg"
-    clt_universal_dmg: "{{ local_root_dir }}/openclaw-team/Command_Line_Tools_26.5_Universal.dmg"
+    clt_universal_dmg: "{{ local_team_dir }}/Command_Line_Tools_26.5_Universal.dmg"
     clt_xcode_16_4_dmg: "{{ local_team_dir }}/Command_Line_Tools_for_Xcode_16.4.dmg"
     clt_remote_dir: "{{ remote_run_dir }}/clt-cache"
 
@@ -97,9 +97,11 @@
           }
           trap cleanup EXIT
           /usr/bin/hdiutil attach -nobrowse -quiet -mountpoint "$mount" "$dmg"
-          pkg="$(/usr/bin/find "$mount" -maxdepth 4 -type d -name '*.pkg' -print -quit)"
+          pkg="$(/usr/bin/find "$mount" -maxdepth 4 \( -type f -o -type d \) -name '*.pkg' -print -quit)"
           if [ -z "$pkg" ]; then
             log "No pkg found inside $dmg"
+            cleanup
+            trap - EXIT
             return 1
           fi
           /usr/bin/sudo -n /usr/sbin/installer -pkg "$pkg" -target /

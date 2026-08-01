@@ -6,6 +6,7 @@
     remote_run_dir: "/Users/{{ ansible_user | default('mac') }}/openclaw-installer-run"
     local_report_dir: "scripts/ansible/reports"
     preflight_check_sudo: true
+    enforce_preflight_gates: false
     min_disk_available_kb: 10485760
 
   tasks:
@@ -38,6 +39,19 @@
         user="$(whoami 2>/dev/null || printf unknown)"
         disk_available_kb="$(df -k / 2>/dev/null | awk 'NR==2 {print $4}' || printf 0)"
         console_user="$(stat -f %Su /dev/console 2>/dev/null || printf unknown)"
+        hardware_model="$(sysctl -n hw.model 2>/dev/null || printf unknown)"
+        target_identity="$(printf '%s|%s|%s' "$host" "$user" "$hardware_model" | shasum -a 256 | awk '{print substr($1,1,16)}')"
+        clt_available="$(bool xcode-select -p)"
+        python3_available="$(bool command -v python3)"
+        expected_profile="unsupported"
+        case "${macos_version%%.*}:$arch" in
+          26:arm64) expected_profile="macos26-arm64" ;;
+          14:x86_64) expected_profile="macos14-x64" ;;
+          15:arm64) expected_profile="macos15-arm64" ;;
+          15:x86_64) expected_profile="macos15-x64" ;;
+        esac
+        supported_profile=false
+        [ "$expected_profile" != "unsupported" ] && supported_profile=true
         sudo_checked=false
         sudo_noninteractive_ok=false
         if [ "{{ preflight_check_sudo | bool }}" = "True" ]; then
@@ -61,11 +75,17 @@
           printf '  "generated_at": "%s",\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
           printf '  "host": "%s",\n' "$(printf '%s' "$host" | json_escape)"
           printf '  "user": "%s",\n' "$(printf '%s' "$user" | json_escape)"
+          printf '  "target_identity": "%s",\n' "$(printf '%s' "$target_identity" | json_escape)"
+          printf '  "hardware_model": "%s",\n' "$(printf '%s' "$hardware_model" | json_escape)"
           printf '  "home": "%s",\n' "$(printf '%s' "$HOME" | json_escape)"
           printf '  "run_dir": "%s",\n' "$(printf '%s' "{{ remote_run_dir }}" | json_escape)"
           printf '  "ssh_reached": true,\n'
           printf '  "macos_version": "%s",\n' "$(printf '%s' "$macos_version" | json_escape)"
           printf '  "arch": "%s",\n' "$(printf '%s' "$arch" | json_escape)"
+          printf '  "expected_profile": "%s",\n' "$(printf '%s' "$expected_profile" | json_escape)"
+          printf '  "supported_profile": %s,\n' "$supported_profile"
+          printf '  "clt_available": %s,\n' "$clt_available"
+          printf '  "python3_available": %s,\n' "$python3_available"
           printf '  "disk_available_kb": %s,\n' "${disk_available_kb:-0}"
           printf '  "min_disk_available_kb": %s,\n' "{{ min_disk_available_kb | int }}"
           printf '  "enough_disk": %s,\n' "$enough_disk"
@@ -79,10 +99,17 @@
           printf '}\n'
         } > "$report"
         cat "$report"
+        if [ "{{ enforce_preflight_gates | bool }}" = "True" ]; then
+          [ "$enough_disk" = "true" ] || exit 20
+          [ "$supported_profile" = "true" ] || exit 20
+          if [ "$expected_profile" = "macos14-x64" ]; then
+            [ "$clt_available" = "true" ] || exit 20
+          fi
+        fi
         BASH
       register: preflight_result
       changed_when: false
-      failed_when: false
+      failed_when: enforce_preflight_gates | bool and preflight_result.rc != 0
 
     - name: Ensure local preflight report directory exists
       ansible.builtin.file:

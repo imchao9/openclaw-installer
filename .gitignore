@@ -10,11 +10,14 @@ __pycache__/
 
 # Local install outputs and package build products
 .package-build/
+.layer-build/
+.build-cache/
 dist/
 install-files/
 serve/
 upload-packages/*
 !upload-packages/fix-codex-cli.sh
+deliveries/
 scripts/archive/
 
 # Sensitive local material. Keep this outside Git.

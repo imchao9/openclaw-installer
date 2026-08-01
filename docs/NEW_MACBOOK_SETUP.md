@@ -14,7 +14,7 @@ bash scripts/make-package.sh upload-packages/openclaw.zip
 # 3. 在新 MacBook 上进入复制好的安装目录，执行统一入口
 bash install-openclaw.sh
 
-# 4. 可选：让 Codex 和 OpenClaw 都走本机 CLIProxyAPI
+# 4. 如需确认或修复默认路由：让 Codex 和 OpenClaw 都走本机 CLIProxyAPI
 bash install-openclaw.sh --with-cliproxy-config
 ```
 
@@ -54,7 +54,7 @@ bash install-openclaw.sh
 2. `INSTALL_PHASE=base bash install-new-macbook.sh`；
 3. `INSTALL_PHASE=office-skills bash install-new-macbook.sh`；
 4. `PRIVATE_SECRETS_DIR=... INSTALL_PHASE=secrets bash install-new-macbook.sh`，如果找到 `private-secrets/`；
-5. `INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh`，仅在传入 `--with-cliproxy-config` 时执行；
+5. 自动执行 CLIProxy 配置适配；也可用 `INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh` 单独重跑；
 6. `INSTALL_PHASE=validate bash install-new-macbook.sh`，让 OpenClaw 和 Codex 分别回复 `HELLO_OK` 作为验收。
 
 统一入口默认设置 `SKIP_WEIXIN=1`，不在无人值守安装里等待微信二维码扫码。需要当场连接微信时：
@@ -162,7 +162,7 @@ INSTALL_PHASE=deepseek bash install-new-macbook.sh
 
 Clash 订阅地址不会打印到终端。第二阶段会把订阅保存到用户私密目录，并生成双击助手；打开后会把第一个订阅 URL 复制到剪贴板，再打开 Clash Party 或 Clash Verge。
 
-## 可选：Codex/OpenClaw 走 CLIProxyAPI
+## 默认：Codex/OpenClaw 走 CLIProxyAPI
 
 完成 base 阶段后，CLIProxyAPI 会以用户级 LaunchAgent 启动；完成 secrets 阶段后，会恢复 `private-secrets/cliproxy/config.yaml` 和 auth JSON。需要让 Codex 和 OpenClaw 都连接本机 CLIProxyAPI 时执行：
 
