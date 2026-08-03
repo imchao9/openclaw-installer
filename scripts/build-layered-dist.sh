@@ -113,6 +113,8 @@ copy_item "$(asset_source_path clash-party-macos-1.9.6-x64.pkg)" \
   "$x64_team/clash-party-macos-1.9.6-x64.pkg"
 copy_item "$(asset_source_path DingTalk_v8.3.40-Installer_56018405_universal.dmg)" \
   "$x64_team/DingTalk_v8.3.40-Installer_56018405_universal.dmg"
+copy_item "$(asset_source_path AweSun_v16.5.0.30905_x86_64.dmg)" \
+  "$x64_team/AweSun_v16.5.0.30905_x86_64.dmg"
 copy_item "$profile_root/install-files/openclaw-team/cliproxy" "$x64_team/cliproxy"
 lipo -archs "$x64_team/cliproxy/CLIProxyAPI" | tr ' ' '\n' | grep -qx x86_64 || {
   echo "x64 common layer contains a non-x86_64 CLIProxyAPI" >&2
@@ -219,6 +221,11 @@ for profile, layer_ids in profile_layers.items():
         if is_x64
         else "openclaw-team/DingTalk_v8.3.30-Installer_55620621_arm64.dmg"
     )
+    awesun = (
+        "openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg"
+        if is_x64
+        else "openclaw-team/AweSun_v16.5.0.30757_arm64.dmg"
+    )
     required = [
         "openclaw-team/Codex.dmg",
         "openclaw-team/OpenClaw-2026.5.26.dmg",
@@ -226,6 +233,7 @@ for profile, layer_ids in profile_layers.items():
         "openclaw-team/cliproxy/CLIProxyAPI",
         clash,
         dingtalk,
+        awesun,
     ]
     if profile.startswith("macos15-"):
         required.append("openclaw-team/Command_Line_Tools_for_Xcode_16.4.dmg")
@@ -255,7 +263,7 @@ for profile, layer_ids in profile_layers.items():
             {
                 "asset": "openclaw-team/Codex.dmg",
                 "source_bundle": "ChatGPT.app",
-                "target_bundle": "Codex.app",
+                "target_bundle": "ChatGPT.app",
             },
             {
                 "asset": "openclaw-team/OpenClaw-2026.5.26.dmg",

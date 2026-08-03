@@ -539,10 +539,12 @@ ensure_codex_command_available() {
     "/usr/local/bin/codex" \
     "/opt/homebrew/bin/codex" \
     "$HOME/.local/bin/codex" \
+    "/Applications/ChatGPT.app/Contents/Resources/codex" \
+    "/Applications/ChatGPT.app/Contents/Resources/native/codex-macos" \
     "/Applications/Codex.app/Contents/Resources/codex"
   do
     if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-      if [ "$candidate" = "/Applications/Codex.app/Contents/Resources/codex" ]; then
+      if [[ "$candidate" == /Applications/*.app/Contents/Resources/* ]]; then
         if is_dry_run; then
           dry_log "Would link Codex.app CLI to $link"
         else

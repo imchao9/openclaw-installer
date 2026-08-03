@@ -187,8 +187,8 @@ assets:
     verified_status: "local_asset_verified"
     sha256: "571f407dbd27057fc96725dde1ae894df86b22ec08af22d983d44aff3eba56b9"
 
-  - id: awesun
-    name: "AweSun"
+  - id: awesun-arm64
+    name: "AweSun ARM64"
     local_file: "upload-packages/source-assets/openclaw-team/AweSun_v16.5.0.30757_arm64.dmg"
     version: "16.5.0.30757"
     url: "https://sunlogin.oray.com/en/download/"
@@ -199,6 +199,19 @@ assets:
     verified_on: "2026-06-19"
     verified_status: "source_page_found"
     sha256: "9d62030e7f695f83a28707dcd2f891820b44f513f097a5ff38ce616157cba5bf"
+
+  - id: awesun-x64
+    name: "AweSun Intel"
+    local_file: "upload-packages/source-assets/openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg"
+    version: "16.5.0.30905"
+    url: "https://dw.oray.com/sl/mac/AweSun_v16.5.0.30905_x86_64.dmg"
+    source_page: "https://sunlogin.oray.com/en/download/"
+    source_type: "direct-download"
+    update_policy: "pinned_x64_dmg"
+    check_method: "sha256"
+    verified_on: "2026-08-03"
+    verified_status: "official_artifact_verified"
+    sha256: "14ef421eb76593f4034bb5c50a2ce35c29b69c10a55f34641de47f1d195d5661"
 
   - id: apple-clt-16
     name: "Apple Command Line Tools for Xcode 16.4"

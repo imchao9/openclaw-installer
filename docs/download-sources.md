@@ -68,6 +68,7 @@ bash scripts/refresh-download-assets.sh --asset codex-app
 | 豆包输入法 | 不打包 | manual | <https://srf.doubao.com/pc> | 用户手动下载安装。 |
 | 钉钉 | `openclaw-team/DingTalk_v8.3.30-Installer_55620621_arm64.dmg` | 8.3.30 | <https://www.dingtalk.io/download/> | 厂商下载页更新，直链不保证稳定。 |
 | 向日葵 AweSun | `openclaw-team/AweSun_v16.5.0.30757_arm64.dmg` | 16.5.0.30757 | <https://sunlogin.oray.com/en/download/> | 厂商下载页更新，直链不保证稳定。 |
+| 向日葵 AweSun Intel | `openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg` | 16.5.0.30905 | <https://dw.oray.com/sl/mac/AweSun_v16.5.0.30905_x86_64.dmg> | 固定 Intel 直链并校验 SHA-256。 |
 | Apple Command Line Tools for Xcode 16.4 | `openclaw-team/Command_Line_Tools_for_Xcode_16.4.dmg` | 16.4 | <https://developer.apple.com/download/all/> | Apple Developer 手动下载，当前固定不做定期更新。 |
 | Apple Command Line Tools 26.5 Apple Silicon | `openclaw-team/Command_Line_Tools_26.5_Apple_silicon.dmg` | 26.5 | <https://developer.apple.com/download/all/> | Apple Developer 手动下载，当前固定不做定期更新。 |
 

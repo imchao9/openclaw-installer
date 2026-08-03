@@ -106,6 +106,7 @@ run_cliproxy_phase() {
     ensure_cliproxy_auth_dir
     ensure_cliproxy_loopback_host
     ensure_cliproxy_api_key
+    ensure_cliproxy_management_api
     adapt_cliproxy_proxy_url
   else
     log "No private CLIProxyAPI files found; using existing or minimal config"
@@ -113,6 +114,7 @@ run_cliproxy_phase() {
     ensure_cliproxy_auth_dir
     ensure_cliproxy_loopback_host
     ensure_cliproxy_api_key
+    ensure_cliproxy_management_api
     adapt_cliproxy_proxy_url
   fi
   configure_cliproxy_launchagent

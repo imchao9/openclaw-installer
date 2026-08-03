@@ -171,6 +171,7 @@ test_intel_runtime_guardrails_are_present() {
   assert_contains "$(cat "$ROOT/installer-core/scripts/validate-agent-configs.sh")" "refusing to replace it with CLIProxy"
   assert_contains "$(cat "$ROOT/install-new-macbook.sh")" "run_timed_phase extras run_extras_phase"
   assert_contains "$(cat "$ROOT/scripts/ansible/playbooks/install-missing.yml")" "after CLIProxyAPI and agent configuration"
+  assert_contains "$(cat "$ROOT/scripts/ansible/playbooks/install-missing.yml")" "RUN_EXTRAS=0"
   bash -n "$ROOT/installer-core/scripts/validate-agent-configs.sh"
 }
 
@@ -253,7 +254,10 @@ test_complete_install_contract_is_wired() {
   assert_contains "$checkpoints" 'cc_switch_ok'
   assert_contains "$checkpoints" 'codex_auth_cliproxy_ok'
   assert_contains "$checkpoints" '"codex_auth_cliproxy"'
-  assert_contains "$checkpoints" '[ "$arch" = "arm64" ] && [ "$awesun_ok" = "0" ]'
+  assert_contains "$checkpoints" '[ "$awesun_ok" = "0" ]'
+  assert_contains "$checkpoints" 'app_validation'
+  assert_contains "$checkpoints" 'management_api_authenticated'
+  assert_contains "$checkpoints" 'current_profile_file_valid'
   assert_not_contains "$checkpoints" '[ "$doubao_ok" = "0" ]; then'
   assert_contains "$phases" 'configure_cliproxy_agent_configs'
   assert_not_contains "$private" 'CONFIGURE_CLIPROXY_AGENTS'

@@ -9,18 +9,18 @@ export PATH
 RUN_DIR="${OPENCLAW_RUN_DIR:-$HOME/openclaw-installer-run}"
 OUTPUT_PATH=""
 PLAN_PATH=""
+CHECK_REAL_MODEL_REQUEST="${CHECK_REAL_MODEL_REQUEST:-0}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  bash installer-core/scripts/check-install-checkpoints.sh [--run-dir DIR] [--output FILE] [--plan FILE]
+  bash installer-core/scripts/check-install-checkpoints.sh [--run-dir DIR] [--output FILE] [--plan FILE] [--real-model-request]
 
 Outputs:
   - install-report.json: checkpoint state for this machine
   - install-plan.env: shell env consumed by Ansible/install-openclaw.sh
 
-The scan is read-only. Model calls are intentionally left to
-validate-agent-configs.sh.
+The scan is read-only except for an explicitly requested real model call.
 EOF
 }
 
@@ -37,6 +37,10 @@ while [ "$#" -gt 0 ]; do
     --plan)
       PLAN_PATH="$2"
       shift 2
+      ;;
+    --real-model-request)
+      CHECK_REAL_MODEL_REQUEST=1
+      shift
       ;;
     -h|--help)
       usage
@@ -87,6 +91,61 @@ any_app_exists() {
   return 1
 }
 
+find_app_bundle() {
+  local name candidate
+  for name in "$@"; do
+    case "$name" in
+      /*.app) candidate="$name" ;;
+      *) candidate="/Applications/$name.app" ;;
+    esac
+    if [ -d "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+app_executable_path() {
+  local app="$1" executable
+  executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist" 2>/dev/null || true)"
+  [ -n "$executable" ] || return 1
+  printf '%s\n' "$app/Contents/MacOS/$executable"
+}
+
+app_ready() {
+  local app executable archs
+  app="$(find_app_bundle "$@")" || return 1
+  executable="$(app_executable_path "$app")" || return 1
+  [ -x "$executable" ] || return 1
+  archs="$(lipo -archs "$executable" 2>/dev/null || true)"
+  [ -n "$archs" ] && printf '%s\n' "$archs" | tr ' ' '\n' | grep -qx "$arch"
+}
+
+app_validation_json() {
+  local app app_name executable version archs arch_match=false launch_services=false ready=false
+  app="$(find_app_bundle "$@" 2>/dev/null || true)"
+  if [ -n "$app" ]; then
+    executable="$(app_executable_path "$app" 2>/dev/null || true)"
+    version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+    [ -n "$version" ] || version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist" 2>/dev/null || true)"
+    if [ -n "$executable" ] && [ -x "$executable" ]; then
+      archs="$(lipo -archs "$executable" 2>/dev/null || true)"
+      if [ -n "$archs" ] && printf '%s\n' "$archs" | tr ' ' '\n' | grep -qx "$arch"; then
+        arch_match=true
+        ready=true
+      fi
+    fi
+    app_name="$(basename "$app" .app)"
+    if open -Ra "$app_name" >/dev/null 2>&1; then
+      launch_services=true
+    fi
+  fi
+  printf '{"path":"%s","version":"%s","archs":"%s","arch_matches_machine":%s,"launch_services_resolvable":%s,"ready":%s}' \
+    "$(json_escape "$app")" "$(json_escape "$version")" "$(json_escape "$archs")" \
+    "$arch_match" "$launch_services" "$ready"
+}
+
 command_exists() {
   command -v "$1" >/dev/null 2>&1
 }
@@ -105,6 +164,12 @@ http_ok() {
   local url="$1"
   command_exists curl || return 1
   curl --noproxy '*' --connect-timeout 2 --max-time 4 -sSI "$url" | grep -qE '^HTTP/[0-9.]+ 2[0-9][0-9]'
+}
+
+http_get_ok() {
+  local url="$1"
+  command_exists curl || return 1
+  curl --noproxy '*' --connect-timeout 2 --max-time 5 -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null | grep -qE '^2[0-9][0-9]$'
 }
 
 clash_socks_ok() {
@@ -134,6 +199,58 @@ profiles_count() {
   else
     printf '0'
   fi
+}
+
+clash_current_profile_value() {
+  local cfg="$HOME/Library/Application Support/mihomo-party/profile.yaml" value
+  [ -f "$cfg" ] || return 1
+  value="$(awk -F': *' '/^current:/ { print $2; exit }' "$cfg")"
+  value="${value#\"}"; value="${value%\"}"
+  value="${value#\'}"; value="${value%\'}"
+  [ -n "$value" ] || return 1
+  printf '%s\n' "$value"
+}
+
+cliproxy_management_key_value() {
+  local key_file="$HOME/.cli-proxy-api/management.key" key
+  [ -f "$key_file" ] || return 1
+  IFS= read -r key < "$key_file" || true
+  [ -n "$key" ] || return 1
+  printf '%s\n' "$key"
+}
+
+cliproxy_management_configured() {
+  local cfg="$HOME/.cli-proxy-api/config.yaml"
+  [ -f "$cfg" ] || return 1
+  awk '
+    /^remote-management:/ { in_block=1; next }
+    in_block && /^[^[:space:]]/ { exit(found ? 0 : 1) }
+    in_block && /^[[:space:]]+secret-key:[[:space:]]*[^[:space:]]/ { found=1; exit 0 }
+    END { exit(found ? 0 : 1) }
+  ' "$cfg"
+}
+
+cliproxy_management_api_ok() {
+  local key code
+  key="$(cliproxy_management_key_value)" || return 1
+  code="$(curl --noproxy '*' --connect-timeout 2 --max-time 6 -sS -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $key" -H "X-Management-Key: $key" \
+    http://127.0.0.1:8317/v0/management/config 2>/dev/null || true)"
+  printf '%s\n' "$code" | grep -qE '^2[0-9][0-9]$'
+}
+
+cliproxy_real_model_ok() {
+  local api_key response
+  api_key="$(cliproxy_api_key_value)" || return 1
+  response="$(mktemp "${TMPDIR:-/tmp}/cliproxy-real-model.XXXXXX")"
+  curl --noproxy '*' --connect-timeout 3 --max-time 60 -fsS \
+    -H 'Content-Type: application/json' -H "Authorization: Bearer $api_key" \
+    -d '{"model":"gpt-5.5","input":"Reply exactly HELLO_OK","stream":false}' \
+    http://127.0.0.1:8317/v1/responses > "$response" 2>/dev/null || { rm -f "$response"; return 1; }
+  grep -qF 'HELLO_OK' "$response"
+  local result=$?
+  rm -f "$response"
+  return "$result"
 }
 
 openclaw_config_shape_ok() {
@@ -232,14 +349,14 @@ if path_file_contains "$HOME/.zshenv" "/usr/local/bin" || path_file_contains "$H
   path_ok=1
 fi
 
-chrome_ok=0; app_exists "Google Chrome" && chrome_ok=1
-codex_app_ok=0; app_exists "Codex" && codex_app_ok=1
-openclaw_app_ok=0; app_exists "OpenClaw" && openclaw_app_ok=1
-obsidian_ok=0; app_exists "Obsidian" && obsidian_ok=1
-cc_switch_ok=0; any_app_exists "CC-Switch" "CC Switch" && cc_switch_ok=1
-clash_party_app_ok=0; app_exists "Clash Party" && clash_party_app_ok=1
-dingtalk_ok=0; any_app_exists "DingTalk" "钉钉" && dingtalk_ok=1
-awesun_ok=0; any_app_exists "AweSun" "SunloginClient" "向日葵远程控制" && awesun_ok=1
+chrome_ok=0; app_ready "Google Chrome" && chrome_ok=1
+codex_app_ok=0; app_ready "ChatGPT" "Codex" && codex_app_ok=1
+openclaw_app_ok=0; app_ready "OpenClaw" && openclaw_app_ok=1
+obsidian_ok=0; app_ready "Obsidian" && obsidian_ok=1
+cc_switch_ok=0; app_ready "CC-Switch" "CC Switch" && cc_switch_ok=1
+clash_party_app_ok=0; app_ready "Clash Party" && clash_party_app_ok=1
+dingtalk_ok=0; app_ready "DingTalk" "钉钉" && dingtalk_ok=1
+awesun_ok=0; app_ready "AweSun" "SunloginClient" "向日葵远程控制" && awesun_ok=1
 doubao_ok=0
 if [ -d "/Library/Input Methods/DoubaoIme.app" ] || [ -d "$HOME/Library/Input Methods/DoubaoIme.app" ] || any_app_exists "DoubaoImeInstaller_v0.9.1" "DoubaoImeInstaller_v0.9.0"; then
   doubao_ok=1
@@ -302,9 +419,24 @@ fi
 cliproxy_config_ok=0; file_exists "$HOME/.cli-proxy-api/config.yaml" && cliproxy_config_ok=1
 cliproxy_launchagent_ok=0; file_exists "$HOME/Library/LaunchAgents/local.openclaw-installer.cliproxy.plist" && cliproxy_launchagent_ok=1
 cliproxy_listening_ok=0; port_listening 8317 && cliproxy_listening_ok=1
-cliproxy_http_ok=0; http_ok "http://127.0.0.1:8317/" && cliproxy_http_ok=1
+cliproxy_http_ok=0; http_get_ok "http://127.0.0.1:8317/" && cliproxy_http_ok=1
+cliproxy_management_config_ok=0; cliproxy_management_configured && cliproxy_management_config_ok=1
+cliproxy_management_api_ok_flag=0; cliproxy_management_api_ok && cliproxy_management_api_ok_flag=1
+cliproxy_real_model_status="skipped"
+if [ "$CHECK_REAL_MODEL_REQUEST" = "1" ]; then
+  cliproxy_real_model_status="failed"
+  cliproxy_real_model_ok && cliproxy_real_model_status="passed"
+fi
 
-clash_profiles_ok=0; [ "$profile_count" -gt 0 ] 2>/dev/null && clash_profiles_ok=1
+clash_current_profile="$(clash_current_profile_value 2>/dev/null || true)"
+clash_current_profile_file_ok=0
+if [ -n "$clash_current_profile" ] && [ -f "$HOME/Library/Application Support/mihomo-party/profiles/$clash_current_profile.yaml" ]; then
+  clash_current_profile_file_ok=1
+fi
+clash_profiles_ok=0
+if [ "$profile_count" -gt 0 ] 2>/dev/null && [ "$clash_current_profile_file_ok" = "1" ]; then
+  clash_profiles_ok=1
+fi
 clash_process_ok=0
 if process_matches "Clash Party" || process_matches "mihomo-party"; then
   clash_process_ok=1
@@ -356,7 +488,7 @@ required_extra_apps_missing=0
 if [ "$chrome_ok" = "0" ] || [ "$obsidian_ok" = "0" ] || [ "$cc_switch_ok" = "0" ]; then
   required_extra_apps_missing=1
 fi
-if [ "$arch" = "arm64" ] && [ "$awesun_ok" = "0" ]; then
+if [ "$awesun_ok" = "0" ]; then
   required_extra_apps_missing=1
 fi
 if [ "$required_extra_apps_missing" = "1" ]; then
@@ -396,7 +528,8 @@ if [ "$codex_cli_ok" = "0" ] && { [ "$node_ok" = "1" ] || [ "$PLAN_INSTALL_NODE"
 fi
 
 if [ "$cliproxy_binary_ok" = "0" ] || [ "$cliproxy_config_ok" = "0" ] || \
-   [ "$cliproxy_launchagent_ok" = "0" ] || [ "$cliproxy_listening_ok" = "0" ]; then
+   [ "$cliproxy_launchagent_ok" = "0" ] || [ "$cliproxy_listening_ok" = "0" ] || \
+   [ "$cliproxy_management_config_ok" = "0" ] || [ "$cliproxy_management_api_ok_flag" = "0" ]; then
   PLAN_RUN_CLIPROXY=1
   add_reason "cliproxy runtime incomplete"
 fi
@@ -488,12 +621,12 @@ cat > "$OUTPUT_PATH" <<EOF
     "path_profile": $([ "$path_ok" = "1" ] && printf true || printf false)
   },
   "apps": {
-    "chrome": "$(status app_exists "Google Chrome")",
-    "codex": "$(status app_exists "Codex")",
-    "openclaw": "$(status app_exists "OpenClaw")",
-    "obsidian": "$(status app_exists "Obsidian")",
+    "chrome": $([ "$chrome_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
+    "codex": $([ "$codex_app_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
+    "openclaw": $([ "$openclaw_app_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
+    "obsidian": $([ "$obsidian_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "cc_switch": $([ "$cc_switch_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
-    "clash_party": "$(status app_exists "Clash Party")",
+    "clash_party": $([ "$clash_party_app_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "dingtalk": $([ "$dingtalk_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "awesun": $([ "$awesun_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
     "doubao_input": $([ "$doubao_ok" = "1" ] && printf '"installed"' || printf '"missing"'),
@@ -503,6 +636,17 @@ cat > "$OUTPUT_PATH" <<EOF
     "doubao_menu": $([ "$doubao_menu_ok" = "1" ] && printf true || printf false),
     "doubao_microphone": $([ "$doubao_microphone_ok" = "1" ] && printf true || printf false),
     "doubao_user_duplicate_absent": $([ "$doubao_no_user_duplicate_ok" = "1" ] && printf true || printf false)
+  },
+  "app_validation": {
+    "chrome": $(app_validation_json "Google Chrome"),
+    "codex": $(app_validation_json "ChatGPT" "Codex"),
+    "openclaw": $(app_validation_json "OpenClaw"),
+    "obsidian": $(app_validation_json "Obsidian"),
+    "cc_switch": $(app_validation_json "CC-Switch" "CC Switch"),
+    "clash_party": $(app_validation_json "Clash Party"),
+    "dingtalk": $(app_validation_json "DingTalk" "钉钉"),
+    "awesun": $(app_validation_json "AweSun" "SunloginClient" "向日葵远程控制"),
+    "doubao_input": $(app_validation_json "/Library/Input Methods/DoubaoIme.app" "$HOME/Library/Input Methods/DoubaoIme.app")
   },
   "configs": {
     "codex_auth": $([ "$codex_auth_ok" = "1" ] && printf true || printf false),
@@ -520,11 +664,16 @@ cat > "$OUTPUT_PATH" <<EOF
     "config": $([ "$cliproxy_config_ok" = "1" ] && printf true || printf false),
     "launchagent": $([ "$cliproxy_launchagent_ok" = "1" ] && printf true || printf false),
     "listening_8317": $([ "$cliproxy_listening_ok" = "1" ] && printf true || printf false),
-    "http_root_ok": $([ "$cliproxy_http_ok" = "1" ] && printf true || printf false)
+    "http_root_ok": $([ "$cliproxy_http_ok" = "1" ] && printf true || printf false),
+    "management_configured": $([ "$cliproxy_management_config_ok" = "1" ] && printf true || printf false),
+    "management_api_authenticated": $([ "$cliproxy_management_api_ok_flag" = "1" ] && printf true || printf false),
+    "real_model_request": "$cliproxy_real_model_status"
   },
   "clash": {
     "profiles_count": ${profile_count:-0},
-    "profiles_present": $([ "$clash_profiles_ok" = "1" ] && printf true || printf false),
+    "profiles_present": $([ "$profile_count" -gt 0 ] 2>/dev/null && printf true || printf false),
+    "current_profile": "$(json_escape "$clash_current_profile")",
+    "current_profile_file_valid": $([ "$clash_current_profile_file_ok" = "1" ] && printf true || printf false),
     "process_running": $([ "$clash_process_ok" = "1" ] && printf true || printf false),
     "socks_7890_healthy": $([ "$clash_socks_ok_flag" = "1" ] && printf true || printf false)
   },

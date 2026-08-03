@@ -26,6 +26,7 @@ assert manifest["target_arch"] == "x86_64", manifest["target_arch"]
 root = manifest_path.parent
 paths = {item["path"] for item in manifest["required_assets"]}
 assert "openclaw-team/clash-party-macos-1.9.6-x64.pkg" in paths
+assert "openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg" in paths
 assert not any("Command_Line_Tools" in path for path in paths)
 for item in manifest["required_assets"]:
     path = root / item["path"]
@@ -51,8 +52,8 @@ hdiutil attach -readonly -nobrowse -noverify -mountpoint "$mount_dir" "$codex_dm
 
 app="$mount_dir/ChatGPT.app"
 [ -d "$app" ] || fail "Codex DMG does not contain ChatGPT.app"
-executable="$(defaults read "$app/Contents/Info" CFBundleExecutable)"
-minimum_system="$(defaults read "$app/Contents/Info" LSMinimumSystemVersion)"
+executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+minimum_system="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
 lipo -archs "$app/Contents/MacOS/$executable" | tr ' ' '\n' | grep -qx x86_64 ||
   fail "Codex app does not contain x86_64"
 minimum_major="${minimum_system%%.*}"

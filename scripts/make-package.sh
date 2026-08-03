@@ -122,6 +122,7 @@ add_core_excludes() {
     -x "$NAME/openclaw-team/DoubaoImeInstaller_v0.9.1.app/*"
     -x "$NAME/openclaw-team/DoubaoImeInstaller_v0.9.1.app/**"
     -x "$NAME/openclaw-team/AweSun_v16.5.0.30757_arm64.dmg"
+    -x "$NAME/openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg"
     -x "$NAME/openclaw-team/CC-Switch-v3.15.0-macOS.dmg"
     -x "$NAME/openclaw-team/Homebrew.pkg"
     -x "$NAME/openclaw-team/openclaw-npm-cache.tgz"

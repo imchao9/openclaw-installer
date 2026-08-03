@@ -158,6 +158,9 @@ copy_profile_asset() {
     macos14-x64:DingTalk-universal.dmg|macos15-x64:DingTalk-universal.dmg)
       src="${DINGTALK_DMG_X64:-$(asset_source_path DingTalk_v8.3.40-Installer_56018405_universal.dmg)}"
       ;;
+    macos14-x64:AweSun-x64.dmg|macos15-x64:AweSun-x64.dmg)
+      src="${AWESUN_DMG_X64:-$(asset_source_path AweSun_v16.5.0.30905_x86_64.dmg)}"
+      ;;
     *)
       src="$(asset_source_path "$asset")"
       ;;
@@ -189,6 +192,7 @@ copy_openclaw_team_assets() {
   if [[ "$profile" == macos*-x64 ]]; then
     copy_profile_asset "$profile" "clash-party-macos-1.9.6-x64.pkg" "$dst/clash-party-macos-1.9.6-x64.pkg"
     copy_profile_asset "$profile" "DingTalk-universal.dmg" "$dst/DingTalk_v8.3.40-Installer_56018405_universal.dmg"
+    copy_profile_asset "$profile" "AweSun-x64.dmg" "$dst/AweSun_v16.5.0.30905_x86_64.dmg"
   else
     copy_item "$(asset_source_path AweSun_v16.5.0.30757_arm64.dmg)" "$dst/AweSun_v16.5.0.30757_arm64.dmg"
     copy_item "$(asset_source_path 'Clash Verge 2.5.1.dmg')" "$dst/Clash Verge 2.5.1.dmg"
@@ -310,15 +314,17 @@ EOF
 }
 
 write_machine_manifest() {
-  local profile="$1" dist="$2" arch clt clash dingtalk
+  local profile="$1" dist="$2" arch clt clash dingtalk awesun
   arch="$(profile_arch "$profile")"
   clt="$(profile_clt_asset "$profile")"
   if [[ "$profile" == macos*-x64 ]]; then
     clash="openclaw-team/clash-party-macos-1.9.6-x64.pkg"
     dingtalk="openclaw-team/DingTalk_v8.3.40-Installer_56018405_universal.dmg"
+    awesun="openclaw-team/AweSun_v16.5.0.30905_x86_64.dmg"
   else
     clash="openclaw-team/clash-party-macos-1.9.5-arm64.pkg"
     dingtalk="openclaw-team/DingTalk_v8.3.30-Installer_55620621_arm64.dmg"
+    awesun="openclaw-team/AweSun_v16.5.0.30757_arm64.dmg"
   fi
 
   MANIFEST_PROFILE="$profile" \
@@ -326,6 +332,7 @@ write_machine_manifest() {
   MANIFEST_CLT="${clt:+openclaw-team/$clt}" \
   MANIFEST_CLASH="$clash" \
   MANIFEST_DINGTALK="$dingtalk" \
+  MANIFEST_AWESUN="$awesun" \
   /usr/bin/python3 - "$dist" <<'PY'
 import hashlib
 import json
@@ -342,6 +349,7 @@ required = [
     "openclaw-team/cliproxy/CLIProxyAPI",
     os.environ["MANIFEST_CLASH"],
     os.environ["MANIFEST_DINGTALK"],
+    os.environ["MANIFEST_AWESUN"],
 ]
 if os.environ.get("MANIFEST_CLT"):
     required.append(os.environ["MANIFEST_CLT"])
@@ -363,7 +371,7 @@ manifest = {
     "target_arch": os.environ["MANIFEST_ARCH"],
     "required_assets": assets,
     "app_mappings": [
-        {"asset": "openclaw-team/Codex.dmg", "source_bundle": "ChatGPT.app", "target_bundle": "Codex.app"},
+        {"asset": "openclaw-team/Codex.dmg", "source_bundle": "ChatGPT.app", "target_bundle": "ChatGPT.app"},
         {"asset": "openclaw-team/OpenClaw-2026.5.26.dmg", "source_bundle": "OpenClaw.app", "target_bundle": "OpenClaw.app"},
     ],
 }

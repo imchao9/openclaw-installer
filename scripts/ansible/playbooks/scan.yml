@@ -22,6 +22,8 @@
           --output {{ (remote_run_dir + '/reports/' + scan_label + '-install-report.json') | quote }}
           --plan {{ (remote_run_dir + '/reports/' + scan_label + '-install-plan.env') | quote }}
         executable: /bin/bash
+      environment:
+        CHECK_REAL_MODEL_REQUEST: "{{ '1' if scan_label == 'final' else '0' }}"
       register: scan_result
       changed_when: false
 

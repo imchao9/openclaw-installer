@@ -16,6 +16,96 @@ EOF
   log "Wrote minimal CLIProxyAPI config: $CLIPROXY_CONFIG"
 }
 
+ensure_cliproxy_management_api() {
+  [ -f "$CLIPROXY_CONFIG" ] || return
+  local key_file="$CLIPROXY_HOME/management.key" key existing
+  key=""
+  if [ -f "$key_file" ]; then
+    IFS= read -r key < "$key_file" || true
+  fi
+  existing="$(awk '
+    /^remote-management:/ { in_block=1; next }
+    in_block && /^[^[:space:]]/ { exit }
+    in_block && /^[[:space:]]+secret-key:/ {
+      sub(/^[[:space:]]+secret-key:[[:space:]]*/, "")
+      gsub(/^['"'"']|['"'"']$/, "")
+      print
+      exit
+    }
+  ' "$CLIPROXY_CONFIG")"
+  if [ -z "$key" ] && [ -n "$existing" ] && [[ "$existing" != \$2\$* ]]; then
+    key="$existing"
+  fi
+  if [ -z "$key" ]; then
+    if command -v openssl >/dev/null 2>&1; then
+      key="$(openssl rand -hex 24)"
+    else
+      key="$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')"
+    fi
+  fi
+
+  if is_dry_run; then
+    dry_log "Would enable loopback-only CLIProxyAPI Management API and save its key"
+    return
+  fi
+
+  mkdir -p "$CLIPROXY_HOME"
+  printf '%s\n' "$key" > "$key_file"
+  chmod 600 "$key_file"
+
+  local current_allow current_secret
+  current_allow="$(awk '
+    /^remote-management:/ { in_block=1; next }
+    in_block && /^[^[:space:]]/ { exit }
+    in_block && /^[[:space:]]+allow-remote:/ { sub(/.*:[[:space:]]*/, ""); print; exit }
+  ' "$CLIPROXY_CONFIG")"
+  current_secret="$existing"
+  if [ "$current_allow" = "false" ] && { [ "$current_secret" = "$key" ] || [[ "$current_secret" == \$2\$* ]]; }; then
+    return
+  fi
+
+  log "Configuring loopback-only CLIProxyAPI Management API"
+  cp "$CLIPROXY_CONFIG" "$CLIPROXY_CONFIG.bak.$(date +%Y%m%d_%H%M%S)"
+  awk -v key="$key" '
+    function finish_block() {
+      if (in_block && !seen_allow) print "  allow-remote: false"
+      if (in_block && !seen_secret) print "  secret-key: " key
+      in_block=0
+    }
+    /^remote-management:/ {
+      finish_block()
+      print
+      in_block=1
+      seen_allow=0
+      seen_secret=0
+      found=1
+      next
+    }
+    in_block && /^[^[:space:]]/ { finish_block() }
+    in_block && /^[[:space:]]+allow-remote:/ {
+      if (!seen_allow) print "  allow-remote: false"
+      seen_allow=1
+      next
+    }
+    in_block && /^[[:space:]]+secret-key:/ {
+      if (!seen_secret) print "  secret-key: " key
+      seen_secret=1
+      next
+    }
+    { print }
+    END {
+      finish_block()
+      if (!found) {
+        print "remote-management:"
+        print "  allow-remote: false"
+        print "  secret-key: " key
+      }
+    }
+  ' "$CLIPROXY_CONFIG" > "$CLIPROXY_CONFIG.tmp"
+  mv "$CLIPROXY_CONFIG.tmp" "$CLIPROXY_CONFIG"
+  chmod 600 "$CLIPROXY_CONFIG"
+}
+
 install_cliproxy_runtime() {
   if [ "${SKIP_CLIPROXY:-0}" = "1" ]; then
     log "Skipping CLIProxyAPI install (SKIP_CLIPROXY=1)"

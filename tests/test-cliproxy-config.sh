@@ -36,16 +36,20 @@ YAML
 ensure_cliproxy_auth_dir
 ensure_cliproxy_loopback_host
 ensure_cliproxy_api_key
+ensure_cliproxy_management_api
 
 grep -qxF 'host: "127.0.0.1"' "$CLIPROXY_CONFIG"
 grep -qxF "auth-dir: \"$CLIPROXY_HOME\"" "$CLIPROXY_CONFIG"
 grep -qxF '  - open-api' "$CLIPROXY_CONFIG"
 grep -qxF '  secret-key: test-placeholder' "$CLIPROXY_CONFIG"
+[ "$(cat "$CLIPROXY_HOME/management.key")" = "test-placeholder" ]
+grep -qxF '  allow-remote: false' "$CLIPROXY_CONFIG"
 
 before="$(shasum -a 256 "$CLIPROXY_CONFIG" | awk '{print $1}')"
 ensure_cliproxy_auth_dir
 ensure_cliproxy_loopback_host
 ensure_cliproxy_api_key
+ensure_cliproxy_management_api
 after="$(shasum -a 256 "$CLIPROXY_CONFIG" | awk '{print $1}')"
 [ "$before" = "$after" ] || {
   echo "FAIL: CLIProxy config normalization is not idempotent" >&2

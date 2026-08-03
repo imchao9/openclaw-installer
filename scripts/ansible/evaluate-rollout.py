@@ -191,6 +191,11 @@ def evaluate_final(
         blockers.append(issue("required_residual", f"Required checkpoints remain after repair: {', '.join(residual)}"))
         install_state = "fail"
 
+    real_model = final_scan.get("cliproxy", {}).get("real_model_request")
+    if real_model == "failed":
+        blockers.append(issue("cliproxy_real_model", "CLIProxyAPI real model request failed"))
+        install_state = "fail"
+
     codex = validation_state(validation.get("codex", {}))
     openclaw = validation_state(validation.get("openclaw", {}))
     if codex == "manual_action_required":

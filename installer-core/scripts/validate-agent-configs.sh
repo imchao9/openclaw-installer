@@ -116,14 +116,20 @@ EOF
 }
 
 find_codex() {
+  local candidate
   if command -v codex >/dev/null 2>&1; then
     command -v codex
     return 0
   fi
-  if [ -x "/Applications/Codex.app/Contents/Resources/codex" ]; then
-    printf '%s\n' "/Applications/Codex.app/Contents/Resources/codex"
-    return 0
-  fi
+  for candidate in \
+    "/Applications/ChatGPT.app/Contents/Resources/codex" \
+    "/Applications/ChatGPT.app/Contents/Resources/native/codex-macos" \
+    "/Applications/Codex.app/Contents/Resources/codex"; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
   return 1
 }
 

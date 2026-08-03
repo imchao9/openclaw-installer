@@ -25,7 +25,15 @@ install_app_from_dmg() {
     exit 1
   fi
 
-  local target_name="${expected:-$(basename "$app")}"
+  # Newer Codex DMGs are still distributed as Codex.dmg but contain
+  # ChatGPT.app. Preserve the bundle's real name when the expected legacy
+  # name is not present instead of creating a misleading Codex.app directory.
+  local target_name
+  if [ -n "$expected" ] && [ -d "$mount/$expected" ]; then
+    target_name="$expected"
+  else
+    target_name="$(basename "$app")"
+  fi
   local target="/Applications/$target_name"
   if [ -d "$target" ]; then
     log "Replacing existing $(basename "$target")"
@@ -42,6 +50,22 @@ install_app_from_dmg() {
   if [ "$status" -ne 0 ]; then
     exit "$status"
   fi
+}
+
+installed_app_ready() {
+  local name app executable machine_arch archs
+  machine_arch="$(uname -m)"
+  for name in "$@"; do
+    app="/Applications/$name.app"
+    [ -d "$app" ] || continue
+    executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist" 2>/dev/null || true)"
+    [ -n "$executable" ] && [ -x "$app/Contents/MacOS/$executable" ] || continue
+    archs="$(lipo -archs "$app/Contents/MacOS/$executable" 2>/dev/null || true)"
+    if [ -n "$archs" ] && printf '%s\n' "$archs" | tr ' ' '\n' | grep -qx "$machine_arch"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 install_app_dmgs_parallel() {
@@ -129,17 +153,23 @@ install_extra_apps() {
 
   local app_jobs=()
   local dingtalk_dmg=""
-  if [ -f "$BUNDLE_DIR/googlechrome.dmg" ]; then
+  if installed_app_ready "Google Chrome"; then
+    log "Already installed and compatible: Google Chrome"
+  elif [ -f "$BUNDLE_DIR/googlechrome.dmg" ]; then
     app_jobs+=("Google Chrome" "$BUNDLE_DIR/googlechrome.dmg" "Google Chrome.app")
   else
     log "Skipping Google Chrome because googlechrome.dmg is not in this bundle"
   fi
-  if [ -f "$BUNDLE_DIR/Obsidian-1.12.7.dmg" ]; then
+  if installed_app_ready "Obsidian"; then
+    log "Already installed and compatible: Obsidian"
+  elif [ -f "$BUNDLE_DIR/Obsidian-1.12.7.dmg" ]; then
     app_jobs+=("Obsidian" "$BUNDLE_DIR/Obsidian-1.12.7.dmg" "Obsidian.app")
   else
     log "Skipping Obsidian because Obsidian-1.12.7.dmg is not in this bundle"
   fi
-  if [ -f "$BUNDLE_DIR/CC-Switch-v3.15.0-macOS.dmg" ]; then
+  if installed_app_ready "CC-Switch" "CC Switch"; then
+    log "Already installed and compatible: CC-Switch"
+  elif [ -f "$BUNDLE_DIR/CC-Switch-v3.15.0-macOS.dmg" ]; then
     app_jobs+=("CC-Switch" "$BUNDLE_DIR/CC-Switch-v3.15.0-macOS.dmg" "")
   else
     log "Skipping CC-Switch because CC-Switch-v3.15.0-macOS.dmg is not in this bundle"
@@ -152,16 +182,27 @@ install_extra_apps() {
     install_app_dmgs_parallel "${app_jobs[@]}"
   fi
 
+  local awesun_dmg="" machine_arch
+  machine_arch="$(uname -m)"
+  if [ "$machine_arch" = "x86_64" ]; then
+    awesun_dmg="$(find "$BUNDLE_DIR" -maxdepth 1 -type f \( -iname 'AweSun*x86_64*.dmg' -o -iname 'AweSun*x64*.dmg' \) -print | sort | tail -n 1)"
+  else
+    awesun_dmg="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -iname 'AweSun*arm64*.dmg' -print | sort | tail -n 1)"
+  fi
   if [ "${SKIP_AWESUN:-0}" = "1" ]; then
     log "Skipping AweSun (SKIP_AWESUN=1)"
-  elif [ -f "$BUNDLE_DIR/AweSun_v16.5.0.30757_arm64.dmg" ]; then
-    install_pkg_from_dmg "AweSun" "$BUNDLE_DIR/AweSun_v16.5.0.30757_arm64.dmg"
+  elif installed_app_ready "AweSun" "SunloginClient" "向日葵远程控制"; then
+    log "Already installed and compatible: AweSun"
+  elif [ -n "$awesun_dmg" ]; then
+    install_pkg_from_dmg "AweSun" "$awesun_dmg"
   else
-    log "Skipping AweSun because AweSun_v16.5.0.30757_arm64.dmg is not in this bundle"
+    log "Skipping AweSun because no $machine_arch-compatible AweSun DMG is in this bundle"
   fi
 
   if [ "${SKIP_DINGTALK:-0}" = "1" ]; then
     log "Skipping DingTalk (SKIP_DINGTALK=1)"
+  elif installed_app_ready "DingTalk" "钉钉"; then
+    log "Already installed and compatible: DingTalk"
   elif dingtalk_dmg="$(find "$BUNDLE_DIR" -maxdepth 1 -type f -iname 'DingTalk*.dmg' -print | sort | tail -n 1)" && [ -n "$dingtalk_dmg" ]; then
     install_pkg_from_dmg "DingTalk" "$dingtalk_dmg"
   else

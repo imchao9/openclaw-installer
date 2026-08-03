@@ -255,6 +255,7 @@
             env FORCE="$force_value" \
               RUN_BASE=1 \
               RUN_SECRETS=0 \
+              RUN_EXTRAS=0 \
               RUN_CLIPROXY_CONFIG=0 \
               RUN_VALIDATE=0 \
               bash install-openclaw.sh --skip-validate
@@ -266,6 +267,7 @@
             env FORCE="$force_value" \
               RUN_BASE=0 \
               RUN_SECRETS="$PLAN_RUN_SECRETS" \
+              RUN_EXTRAS=0 \
               RUN_CLIPROXY_CONFIG="$PLAN_RUN_CLIPROXY_CONFIG" \
               RUN_VALIDATE=0 \
               bash install-openclaw.sh --skip-validate
