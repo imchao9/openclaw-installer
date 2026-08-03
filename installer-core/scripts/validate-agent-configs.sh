@@ -249,8 +249,10 @@ if (!providers.includes('cliproxy') || !providers.includes('deepseek')) {
   console.error(`Expected providers cliproxy and deepseek, got: ${providers.join(', ') || '<none>'}`);
   process.exit(1);
 }
-if (primary !== 'cliproxy/gpt-5.5') {
-  console.error(`Expected primary cliproxy/gpt-5.5, got: ${primary || '<none>'}`);
+const cliproxyModel = process.env.CLIPROXY_MODEL || 'gpt-5.6-terra';
+const expectedPrimary = `cliproxy/${cliproxyModel}`;
+if (primary !== expectedPrimary) {
+  console.error(`Expected primary ${expectedPrimary}, got: ${primary || '<none>'}`);
   process.exit(1);
 }
 if (!fallbacks.includes('deepseek/deepseek-v4-pro')) {
@@ -301,7 +303,7 @@ const home = process.env.HOME;
 const configPath = path.join(home, '.openclaw', 'openclaw.json');
 const cliproxyBaseUrl = process.env.CLIPROXY_BASE_URL || 'http://127.0.0.1:8317/v1';
 const cliproxyApiKey = process.env.CLIPROXY_API_KEY || 'open-api';
-const cliproxyModel = process.env.CLIPROXY_MODEL || 'gpt-5.5';
+const cliproxyModel = process.env.CLIPROXY_MODEL || 'gpt-5.6-terra';
 const deepseekBaseUrl = process.env.DEEPSEEK_BASE_URL || 'https://api.qnaigc.com/v1';
 const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek/deepseek-v4-pro';
 
@@ -330,7 +332,7 @@ config.models.providers = {
     models: [
       {
         id: cliproxyModel,
-        name: 'gpt5.5',
+        name: cliproxyModel,
         input: ['text'],
         contextWindow: 272000
       }
@@ -357,7 +359,7 @@ config.agents.defaults.model = config.agents.defaults.model || {};
 config.agents.defaults.model.primary = `cliproxy/${cliproxyModel}`;
 config.agents.defaults.model.fallbacks = [deepseekModel];
 config.agents.defaults.models = config.agents.defaults.models || {};
-config.agents.defaults.models[`cliproxy/${cliproxyModel}`] = { alias: 'gpt5.5' };
+config.agents.defaults.models[`cliproxy/${cliproxyModel}`] = { alias: cliproxyModel };
 config.agents.defaults.models[deepseekModel] = { alias: 'DeepSeek Pro' };
 config.agents.defaults.thinkingDefault = 'off';
 
@@ -588,7 +590,7 @@ def toml_string(name, default=""):
     matches = re.findall(rf'(?m)^\s*{re.escape(name)}\s*=\s*"([^"]*)"', config)
     return matches[-1] if matches else default
 
-model = os.environ.get("CODEX_ENDPOINT_MODEL") or toml_string("model", "gpt-5.5")
+model = os.environ.get("CODEX_ENDPOINT_MODEL") or toml_string("model", "gpt-5.6-terra")
 provider = toml_string("model_provider", "")
 wire_api = toml_string("wire_api", "")
 base_url = toml_string("base_url", "").rstrip("/")

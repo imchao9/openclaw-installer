@@ -359,7 +359,7 @@ Specify an OpenClaw model explicitly:
 
 ```bash
 ansible-playbook -i /tmp/openclaw-inventory.ini scripts/ansible/playbooks/validate-agents.yml \
-  -e openclaw_test_model=cliproxy/gpt-5.5
+  -e openclaw_test_model=cliproxy/gpt-5.6-terra
 ```
 
 If SSH password auth is needed:

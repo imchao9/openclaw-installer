@@ -72,7 +72,7 @@ fi
 HOME="$WORK/home"
 export HOME
 CLIPROXY_BASE_URL="http://127.0.0.1:8317/v1"
-CLIPROXY_MODEL="gpt-5.5"
+CLIPROXY_MODEL="gpt-5.6-terra"
 CLIPROXY_CODEX_PROVIDER="custom"
 CLIPROXY_OPENCLAW_PROVIDER="cliproxy"
 mkdir -p "$HOME/.codex" "$HOME/.openclaw"
@@ -100,6 +100,7 @@ assert 'model_provider = "custom"' in config
 assert 'base_url = "http://127.0.0.1:8317/v1"' in config
 assert 'wire_api = "responses"' in config
 assert 'requires_openai_auth = true' in config
+assert 'model = "gpt-5.6-terra"' in config
 backups = sorted((home / ".codex").glob("config.toml.bak.*"))
 assert len(backups) == 1, backups
 assert 'model_provider = "legacy"' in backups[0].read_text()

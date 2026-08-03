@@ -245,7 +245,7 @@ cliproxy_real_model_ok() {
   response="$(mktemp "${TMPDIR:-/tmp}/cliproxy-real-model.XXXXXX")"
   curl --noproxy '*' --connect-timeout 3 --max-time 60 -fsS \
     -H 'Content-Type: application/json' -H "Authorization: Bearer $api_key" \
-    -d '{"model":"gpt-5.5","input":"Reply exactly HELLO_OK","stream":false}' \
+    -d "{\"model\":\"${CLIPROXY_MODEL:-gpt-5.6-terra}\",\"input\":\"Reply exactly HELLO_OK\",\"stream\":false}" \
     http://127.0.0.1:8317/v1/responses > "$response" 2>/dev/null || { rm -f "$response"; return 1; }
   grep -qF 'HELLO_OK' "$response"
   local result=$?
@@ -257,7 +257,7 @@ openclaw_config_shape_ok() {
   local cfg="$HOME/.openclaw/openclaw.json"
   [ -f "$cfg" ] || return 1
   grep -qF 'cliproxy' "$cfg" || return 1
-  grep -qF 'gpt-5.5' "$cfg" || return 1
+  grep -qF "${CLIPROXY_MODEL:-gpt-5.6-terra}" "$cfg" || return 1
   grep -qF 'deepseek-v4-pro' "$cfg" || return 1
 }
 

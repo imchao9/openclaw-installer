@@ -153,13 +153,13 @@ INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 该步骤会备份并改写：
 
 - `~/.codex/auth.json`：写入 CLIProxyAPI `config.yaml` 中当前生效的首个 `api-keys` 值；没有现成值时使用默认 `open-api`。
-- `~/.codex/config.toml`：设置 `model_provider="custom"`、`model="gpt-5.5"`、`base_url="http://127.0.0.1:8317/v1"`。
-- `~/.openclaw/openclaw.json`：设置 `cliproxy/gpt-5.5` provider 为默认模型，并移除旧的 `matrixrouter` / `anthropic` provider。
+- `~/.codex/config.toml`：设置 `model_provider="custom"`、`model="gpt-5.6-terra"`、`base_url="http://127.0.0.1:8317/v1"`。
+- `~/.openclaw/openclaw.json`：设置 `cliproxy/gpt-5.6-terra` provider 为默认模型，并移除旧的 `matrixrouter` / `anthropic` provider。
 
 可通过环境变量覆盖默认值：
 
 ```bash
-CLIPROXY_BASE_URL=http://127.0.0.1:8317/v1 CLIPROXY_API_KEY=open-api CLIPROXY_MODEL=gpt-5.5 INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
+CLIPROXY_BASE_URL=http://127.0.0.1:8317/v1 CLIPROXY_API_KEY=open-api CLIPROXY_MODEL=gpt-5.6-terra INSTALL_PHASE=cliproxy-config bash install-new-macbook.sh
 ```
 
 ## 自动验收：OpenClaw / Codex 回复测试
@@ -174,7 +174,7 @@ INSTALL_PHASE=validate bash install-new-macbook.sh
 CODEX_VALIDATION_MODE=exec INSTALL_PHASE=validate bash install-new-macbook.sh
 ```
 
-OpenClaw 会先检查配置只包含 `cliproxy` 和 `deepseek`，主模型为 `cliproxy/gpt-5.5`，fallback 为 `deepseek/deepseek-v4-pro`；然后再用 `openclaw infer model run --prompt "你好你是谁"` 发起真实模型调用。默认使用 OpenClaw 当前默认模型且只要求有非空回复；如果要指定模型，可设置 `OPENCLAW_TEST_MODEL=cliproxy/gpt-5.5`；如果要精确匹配 Codex/OpenClaw 的回复文本，需要设置 `EXPECTED_TEXT`、对应 prompt，并把 Codex 切到 `CODEX_VALIDATION_MODE=exec`。
+OpenClaw 会先检查配置只包含 `cliproxy` 和 `deepseek`，主模型为 `cliproxy/gpt-5.6-terra`，fallback 为 `deepseek/deepseek-v4-pro`；然后再用 `openclaw infer model run --prompt "你好你是谁"` 发起真实模型调用。默认使用 OpenClaw 当前默认模型且只要求有非空回复；如果要指定模型，可设置 `OPENCLAW_TEST_MODEL=cliproxy/gpt-5.6-terra`；如果要精确匹配 Codex/OpenClaw 的回复文本，需要设置 `EXPECTED_TEXT`、对应 prompt，并把 Codex 切到 `CODEX_VALIDATION_MODE=exec`。
 
 单独验证某一边：
 
